@@ -12,7 +12,9 @@ const startingZoom = savedZoom ? parseInt(savedZoom, 10) : 12;
 
 const map = L.map('map', {
     zoomControl: false,
-    preferCanvas: true   // Bundles all plots into an image so the print plugin doesn't crash
+    tap: false,          // <-- Changed to false (Crucial Android fix)
+    dragging: true,
+    preferCanvas: true   
 }).setView(startingCenter, startingZoom);
 
 // Clean up session storage so standard refreshes behave normally
@@ -71,13 +73,15 @@ map.on('locationerror', function(e) {
 const streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors',
     maxZoom: 22,         // The new absolute zoom limit for the user
-    maxNativeZoom: 19    // Tells Leaflet to stretch tiles after level 19
+    maxNativeZoom: 19,    // Tells Leaflet to stretch tiles after level 19
+    crossOrigin: true // <-- ADD THIS
 }).addTo(map);
 
 const satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
     maxZoom: 22,         // The new absolute zoom limit for the user
-    maxNativeZoom: 19    // Tells Leaflet to stretch tiles after level 19
+    maxNativeZoom: 19,    // Tells Leaflet to stretch tiles after level 19
+    crossOrigin: true // <-- Add this to allow the image exporter to read the satellite pixels
 });
 
 L.control.layers({
@@ -137,16 +141,47 @@ L.control.browserPrint({
     }
 }).addTo(map);
 
+// ==========================================
+// NEW: Map Image Export (PNG/JPG) Control
+// ==========================================
+L.simpleMapScreenshoter({
+    hidden: false,           // Show the camera button on the map
+    position: 'topright',    // Place it below the PDF print button
+    preventDownload: false,  // Automatically trigger the file download
+    mimeType: 'image/png',  // 'image/jpeg' or 'image/png'
+    cropImageByInnerWH: true // Crops out the Leaflet UI elements to just show the map
+}).addTo(map);
+
+// UX Enhancement: Auto-enable Geoman editing when the print box appears
 // UX Enhancement: Auto-enable Geoman editing when the print box appears
 map.on('layeradd', function(e) {
-    // Detect the red dashed print rectangle when the print plugin adds it to the map
     if (e.layer instanceof L.Rectangle && e.layer.options.color === 'red' && e.layer.options.dashArray === '5, 10') {
         if (e.layer.pm) {
-            // Automatically turn on drag handles so you don't have to click the Geoman pencil tool
-            e.layer.pm.enable();
+            // Enable Geoman and explicitly allow dragging the whole box
+            e.layer.pm.enable({
+                draggable: true 
+            });
+
+            // ANDROID FIX: Lock map panning when touching the inside of the print box
+            e.layer.on('touchstart mousedown', function() {
+                map.dragging.disable();
+            });
+            
+            // Unlock map panning when releasing the touch
+            e.layer.on('touchend mouseup', function() {
+                map.dragging.enable();
+            });
         }
     }
 });
+
+// ANDROID FIX: Lock map panning when dragging the corner/edge dots of ANY Geoman shape
+map.on('pm:markerdragstart', () => map.dragging.disable());
+map.on('pm:markerdragend', () => map.dragging.enable());
+
+// ANDROID FIX: Lock map panning when dragging entire shapes
+map.on('pm:dragstart', () => map.dragging.disable());
+map.on('pm:dragend', () => map.dragging.enable());
 
 // Force map to redraw all vector layers and meshes after the print dialog closes
 // Safely ensure map exists before adding the listener
@@ -264,7 +299,7 @@ function generatePopupHTML(plot, layer) {
         <!-- FIX: Changed to min-w-[260px] and added pb-2 to expand the bottom edge -->
         <div class="min-w-[260px] font-sans pb-2">
             ${plot.imageBase64 
-                ? `<img src="${plot.imageBase64}" class="w-full h-36 object-cover rounded-md mb-3 shadow-sm border border-gray-100" alt="Plot Image">` 
+                ? `<img src="${plot.imageBase64}" class="w-full h-auto max-h-60 object-contain rounded-md mb-3 shadow-sm border border-gray-100 bg-gray-50" alt="Plot Image">` 
                 : ''}
             
             <div class="flex justify-between items-start mb-3 border-b border-gray-100 pb-2 gap-2">
@@ -475,13 +510,46 @@ document.getElementById('metaForm').addEventListener('submit', (e) => {
     closeModal(); 
 });
 
+// REPLACE your current plotImageInput listener with this:
 document.getElementById('plotImageInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = function(event) {
-        document.getElementById('plotImageBase64').value = event.target.result;
+        const img = new Image();
+        img.onload = function() {
+            // Set maximum dimensions for the saved image
+            const MAX_WIDTH = 800;
+            const MAX_HEIGHT = 800;
+            let width = img.width;
+            let height = img.height;
+
+            // Calculate new dimensions while maintaining aspect ratio
+            if (width > height) {
+                if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                }
+            } else {
+                if (height > MAX_HEIGHT) {
+                    width *= MAX_HEIGHT / height;
+                    height = MAX_HEIGHT;
+                }
+            }
+
+            // Draw to canvas for compression
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // Compress to JPEG at 70% quality (drastically reduces Base64 string size)
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+            document.getElementById('plotImageBase64').value = compressedBase64;
+        };
+        img.src = event.target.result;
     };
     reader.readAsDataURL(file);
 });
@@ -577,12 +645,26 @@ function renderSidebarList() {
         listContainer.appendChild(item);
     });
 
-    if (listContainer.innerHTML === '') {
-        listContainer.innerHTML = `<div class="text-center p-5 text-gray-400 text-sm mt-10">No properties match your current filters.</div>`;
+// REPLACE the bottom of renderSidebarList() with this:
+    
+    if (landLayersArray.length === 0) {
+        // State 1: No properties exist on the map at all
+        listContainer.innerHTML = `
+            <div class="text-center p-5 text-gray-400 text-sm mt-10">
+                <i class="fas fa-draw-polygon text-3xl mb-3 text-gray-300 block"></i>
+                Draw a plot on the map to begin.
+            </div>`;
+    } else if (listContainer.innerHTML === '') {
+        // State 2: Properties exist, but filters hid all of them
+        listContainer.innerHTML = `
+            <div class="text-center p-5 text-gray-400 text-sm mt-10">
+                No properties match your current filters.
+            </div>`;
     }
+    
     updateHeatmapData();
+} // <-- End of renderSidebarList function
 
-}
 
 function updateTownshipDropdown() {
     const townshipFilter = document.getElementById('townshipFilter');

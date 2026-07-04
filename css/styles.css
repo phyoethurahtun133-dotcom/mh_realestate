@@ -52,7 +52,7 @@ body {
 /* 2. Fix the popup width so it doesn't squish our Tailwind card */
 .leaflet-popup-content {
     margin: 16px !important;
-    padding-top: 8px !important; /* Adds the top padding you requested */
+    padding-top: 5px !important; /* Adds the top padding you requested */
     width: 260px !important;
     line-height: normal !important;
 }
@@ -73,6 +73,6 @@ body {
 
 /* Ensure the popup container has enough top-padding so the button doesn't cover your title */
 .leaflet-popup-content-wrapper {
-    padding-top: 8px !important; 
+    padding-top: 5px !important; 
 }
 

@@ -18,7 +18,6 @@
     
     <link rel="stylesheet" href="css/styles.css" />
 
-    <title>Yangon Real Estate Spatial Map</title>
         <link rel="manifest" href="manifest.json">
         <meta name="theme-color" content="#047857">
         <meta name="mobile-web-app-capable" content="yes">
@@ -45,7 +44,7 @@
             </div>
         </div>
 
-        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[100vh] custom-scrollbar">
+        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[85vh] custom-scrollbar">
             <button id="toggleFiltersBtn" class="w-full p-5 flex justify-between items-center text-left focus:outline-none select-none hover:bg-gray-100 transition-colors">
                 <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">Filters & Tools</h2>
                 <i id="filterToggleIcon" class="fas fa-chevron-up text-gray-400 transition-transform duration-200"></i>
@@ -182,7 +181,7 @@
         <div id="map" class="w-full h-full"></div>
     </main>
 
-    <div id="metaModal" class="fixed inset-0 bg-black bg-opacity-50 hidden justify-center items-center z-[9999]">
+    <div id="metaModal" class="fixed inset-0 bg-black bg-opacity-50 hidden justify-center items-center z-[1000]">
         <div class="bg-white rounded-lg shadow-xl w-96 max-h-[90vh] overflow-y-auto overflow-x-hidden p-6 relative">
             <h3 class="text-lg font-bold text-gray-800 border-b pb-2 mb-4">Plot Metadata</h3>
             <form id="metaForm" class="space-y-3">
@@ -272,6 +271,8 @@
 
     <!-- 4. Leaflet Browser Print (NEW) -->
     <script src="https://cdn.jsdelivr.net/npm/leaflet.browser.print@2.0.2/dist/leaflet.browser.print.min.js"></script>
+
+    <script src="https://unpkg.com/leaflet-simple-map-screenshoter"></script>
 
     <!-- 5. App Logic -->
     <script src="js/app.js"></script>
