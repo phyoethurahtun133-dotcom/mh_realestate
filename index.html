@@ -10,6 +10,9 @@
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.14.0/dist/leaflet-geoman.css" />
+    <!-- Leaflet Geocoder -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+
     <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
     
@@ -42,7 +45,7 @@
             </div>
         </div>
 
-        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[55vh] custom-scrollbar">
+        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[100vh] custom-scrollbar">
             <button id="toggleFiltersBtn" class="w-full p-5 flex justify-between items-center text-left focus:outline-none select-none hover:bg-gray-100 transition-colors">
                 <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">Filters & Tools</h2>
                 <i id="filterToggleIcon" class="fas fa-chevron-up text-gray-400 transition-transform duration-200"></i>
@@ -84,6 +87,31 @@
                         <i class="fas fa-upload mr-1"></i> Load
                         <input type="file" id="importFile" accept=".geojson,.json" class="hidden">
                     </label>
+                </div>
+
+                <div class="flex gap-2">
+                    <button id="exportBtn" class="...">...</button>
+                    <label class="...">...</label>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <button id="toggleHeatmapBtn" class="w-full bg-orange-100 hover:bg-orange-200 text-orange-700 border border-orange-300 text-xs font-bold py-2 px-4 rounded transition-colors shadow-sm flex items-center justify-center gap-2">
+                        <i class="fas fa-fire"></i> Toggle Price Heatmap
+                    </button>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <label class="block text-xs font-bold text-gray-700 mb-2">Highlight by Price (Lakhs)</label>
+                    <div class="flex gap-2 mb-2">
+                        <input type="number" id="minPrice" placeholder="Min" class="w-1/2 p-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-indigo-500">
+                        <input type="number" id="maxPrice" placeholder="Max" class="w-1/2 p-2 border border-gray-300 rounded text-sm focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <button id="highlightPriceBtn" class="w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-700 border border-indigo-300 text-xs font-bold py-2 px-4 rounded transition-colors shadow-sm flex items-center justify-center gap-2">
+                        <i class="fas fa-search-dollar"></i> Highlight Plots
+                    </button>
+                    <button id="clearHighlightBtn" class="w-full mt-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 text-xs font-bold py-1.5 px-4 rounded transition-colors shadow-sm hidden">
+                        Clear Highlights
+                    </button>
                 </div>
 
                 <div class="border-t border-gray-200 pt-4 mt-4">
@@ -236,9 +264,21 @@
         </div>
     </div>
 
+    <!-- 1. Core Leaflet -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.14.0/dist/leaflet-geoman.min.js"></script>
     
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+    <!-- 2. Geoman -->
+    <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.14.0/dist/leaflet-geoman.min.js"></script>
+
+    <!-- 3. Leaflet Geocoder -->
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
+    <!-- 4. Leaflet Browser Print (NEW) -->
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.browser.print@2.0.2/dist/leaflet.browser.print.min.js"></script>
+
+    <!-- 5. App Logic -->
     <script src="js/app.js"></script>
 </body>
 </html>

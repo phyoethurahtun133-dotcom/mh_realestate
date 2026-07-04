@@ -67,6 +67,55 @@ map.pm.addControls({
     removalMode: true
 });
 
+// Map Search / Geocoding Control
+const geocoder = L.Control.geocoder({
+    defaultMarkGeocode: false,
+    position: 'topright',
+    placeholder: 'Search location...'
+})
+.on('markgeocode', function(e) {
+    // When a user selects a search result, fit the map bounds to that location
+    const bbox = e.geocode.bbox;
+    const poly = L.polygon([
+        bbox.getSouthEast(),
+        bbox.getNorthEast(),
+        bbox.getNorthWest(),
+        bbox.getSouthWest()
+    ]);
+    map.fitBounds(poly.getBounds());
+})
+.addTo(map);
+
+// Map Printing / PDF Export Control
+L.control.browserPrint({
+    position: 'topright',
+    title: 'Print / Export Map to PDF',
+    documentTitle: 'Melody House Real Estate Plot',
+    printModes: [
+        L.BrowserPrint.Mode.Portrait(),
+        L.BrowserPrint.Mode.Landscape(),
+        L.BrowserPrint.Mode.Auto(),
+        L.BrowserPrint.Mode.Custom("A4", { title: "Select Area" }) 
+    ],
+    customPrintStyle: { 
+        color: "red", 
+        dashArray: "5, 10", 
+        pane: "overlayPane" // Fallback to a standard Leaflet pane to prevent crashes
+        // NOTE: pmIgnore MUST be removed. Geoman needs to attach to the box so you can resize it.
+    }
+}).addTo(map);
+
+// UX Enhancement: Auto-enable Geoman editing when the print box appears
+map.on('layeradd', function(e) {
+    // Detect the red dashed print rectangle when the print plugin adds it to the map
+    if (e.layer instanceof L.Rectangle && e.layer.options.color === 'red' && e.layer.options.dashArray === '5, 10') {
+        if (e.layer.pm) {
+            // Automatically turn on drag handles so you don't have to click the Geoman pencil tool
+            e.layer.pm.enable();
+        }
+    }
+});
+
 // =========================================================================
 // 2. STATE MANAGEMENT & SIDEBAR COLLAPSE
 // =========================================================================
@@ -123,6 +172,68 @@ document.getElementById('addRemarkBtn').addEventListener('click', function() {
         this.innerText = '+ Add Remark';
     }
 });
+
+// =========================================================================
+// HELPER: GENERATE POPUP HTML
+// =========================================================================
+function generatePopupHTML(plot, layer) {
+    // 1. Fixed Google Maps Directions URL
+    const center = layer.getBounds().getCenter();
+    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${center.lat},${center.lng}`;
+
+    // 2. Dynamic Status Badge Styling
+    const isAvailable = (plot.status === 'Available');
+    const badgeColors = isAvailable 
+        ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
+        : 'bg-red-100 text-red-800 border-red-200';
+
+    // 3. Clean up the location string (ignores empty fields)
+    const locationString = [plot.number, plot.quarter, plot.township].filter(Boolean).join(', ') || 'Unknown Location';
+
+    return `
+        <div class="w-[260px] font-sans">
+            ${plot.imageBase64 
+                ? `<img src="${plot.imageBase64}" class="w-full h-36 object-cover rounded-md mb-3 shadow-sm border border-gray-100" alt="Plot Image">` 
+                : ''}
+            
+            <div class="flex justify-between items-start mb-3 border-b border-gray-100 pb-2 gap-2">
+                <h3 class="font-bold text-lg text-gray-900 leading-tight m-0 p-0">${plot.landId || 'Unnamed Plot'}</h3>
+                <span class="shrink-0 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-full border ${badgeColors}">
+                    ${plot.status || 'N/A'}
+                </span>
+            </div>
+
+            <div class="flex flex-col gap-2 text-sm text-gray-600 mb-4">
+                <div class="flex items-start gap-2">
+                    <i class="fas fa-map-marker-alt mt-1 w-4 text-center text-gray-400"></i>
+                    <span class="leading-snug">${locationString}</span>
+                </div>
+                
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-vector-square w-4 text-center text-gray-400"></i>
+                    <span><span class="font-semibold text-gray-800">${plot.areaAcres > 0 ? plot.areaAcres : '--'}</span> Acres</span>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-coins w-4 text-center text-emerald-500"></i>
+                    <span class="font-bold text-emerald-600">${plot.price ? plot.price + ' Lakhs' : 'Price on Request'}</span>
+                </div>
+            </div>
+
+            ${plot.remark 
+                ? `<div class="bg-gray-50 border border-gray-200 rounded text-xs text-gray-500 p-2 mb-3 italic">
+                     <i class="fas fa-info-circle mr-1 text-gray-400"></i> ${plot.remark}
+                   </div>` 
+                : ''}
+            
+            <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" 
+               class="flex items-center justify-center w-full bg-blue-600 hover:bg-blue-700 !text-white transition-colors text-sm font-semibold py-2 px-4 rounded shadow-sm hover:shadow outline-none">
+                <i class="fas fa-directions mr-2 !text-blue-100"></i> Get Directions
+            </a>
+        </div>
+    `;
+}
+
 
 // =========================================================================
 // 3. DRAWING & VECTOR PLOT MANAGEMENT
@@ -221,23 +332,7 @@ map.on('pm:cut', (e) => {
             });
         }
 
-        newCutLayer.bindPopup(`
-            <div class="min-w-[200px]">
-                ${plot.imageBase64 ? `<img src="${plot.imageBase64}" class="w-full h-32 object-cover rounded-t-md mb-2 border-b border-gray-200">` : ''}
-                <div class="font-bold text-lg border-b pb-1 mb-2 text-gray-800 ${!plot.imageBase64 ? 'mt-1' : ''}">${plot.landId}</div>
-                <div class="grid grid-cols-2 gap-1 text-sm mb-2">
-                    <div class="text-gray-500">Status:</div>
-                    <div class="font-semibold ${plot.status === 'Available' ? 'text-emerald-600' : 'text-gray-500'}">${plot.status}</div>
-                    <div class="text-gray-500">Location:</div>
-                    <div class="text-gray-700">${plot.number || ''} ${plot.quarter || ''} ${plot.township || ''}</div>
-                    <div class="text-gray-500">Area:</div>
-                    <div class="text-gray-700">${plot.areaAcres > 0 ? plot.areaAcres + ' Acres' : 'N/A'}</div>
-                    <div class="text-gray-500">Price:</div>
-                    <div class="font-bold text-emerald-700">${plot.price} Lakhs</div>
-                </div>
-                ${plot.remark ? `<div class="text-xs text-gray-500 italic border-t pt-1 mt-1 bg-gray-50 p-1 rounded"><i class="fas fa-info-circle mr-1"></i>${plot.remark}</div>` : ''}
-            </div>
-        `);
+        newCutLayer.bindPopup(generatePopupHTML(plot, newCutLayer));
 
         // 5. Update the sidebar list and commit the new state to localForage
         renderSidebarList();
@@ -291,23 +386,7 @@ document.getElementById('metaForm').addEventListener('submit', (e) => {
         layerRef: temporarilyDrawnLayer
     };
 
-    temporarilyDrawnLayer.bindPopup(`
-        <div class="min-w-[200px]">
-            ${metadata.imageBase64 ? `<img src="${metadata.imageBase64}" class="w-full h-32 object-cover rounded-t-md mb-2 border-b border-gray-200">` : ''}
-            <div class="font-bold text-lg border-b pb-1 mb-2 text-gray-800 ${!metadata.imageBase64 ? 'mt-1' : ''}">${metadata.landId}</div>
-            <div class="grid grid-cols-2 gap-1 text-sm mb-2">
-                <div class="text-gray-500">Status:</div>
-                <div class="font-semibold ${metadata.status === 'Available' ? 'text-emerald-600' : 'text-gray-500'}">${metadata.status}</div>
-                <div class="text-gray-500">Location:</div>
-                <div class="text-gray-700">${metadata.number || ''} ${metadata.quarter || ''} ${metadata.township || ''}</div>
-                <div class="text-gray-500">Area:</div>
-                <div class="text-gray-700">${metadata.areaAcres > 0 ? metadata.areaAcres + ' Acres' : 'N/A'}</div>
-                <div class="text-gray-500">Price:</div>
-                <div class="font-bold text-emerald-700">${metadata.price} Lakhs</div>
-            </div>
-            ${metadata.remark ? `<div class="text-xs text-gray-500 italic border-t pt-1 mt-1 bg-gray-50 p-1 rounded"><i class="fas fa-info-circle mr-1"></i>${metadata.remark}</div>` : ''}
-        </div>
-    `);
+    temporarilyDrawnLayer.bindPopup(generatePopupHTML(metadata, temporarilyDrawnLayer));
 
     colorCodeLayer(temporarilyDrawnLayer, metadata.color);
 
@@ -429,6 +508,8 @@ function renderSidebarList() {
     if (listContainer.innerHTML === '') {
         listContainer.innerHTML = `<div class="text-center p-5 text-gray-400 text-sm mt-10">No properties match your current filters.</div>`;
     }
+    updateHeatmapData();
+
 }
 
 function updateTownshipDropdown() {
@@ -491,6 +572,154 @@ document.getElementById('townshipFilter').addEventListener('change', () => {
     renderSidebarList();
 });
 document.getElementById('quarterFilter').addEventListener('change', renderSidebarList);
+
+// =========================================================================
+// PRICE RANGE HIGHLIGHT LOGIC
+// =========================================================================
+const highlightPriceBtn = document.getElementById('highlightPriceBtn');
+const clearHighlightBtn = document.getElementById('clearHighlightBtn');
+const minPriceInput = document.getElementById('minPrice');
+const maxPriceInput = document.getElementById('maxPrice');
+
+highlightPriceBtn.addEventListener('click', () => {
+    // 1. Get the values. If left blank, default to 0 and Infinity
+    const min = parseFloat(minPriceInput.value) || 0;
+    const max = parseFloat(maxPriceInput.value) || Infinity;
+
+    if (min === 0 && max === Infinity) return; // Do nothing if both are blank
+
+    // 2. Loop through all saved plots on the map
+    landLayersArray.forEach(plot => {
+        const price = parseFloat(plot.price) || 0;
+        
+        if (price >= min && price <= max) {
+            // IN RANGE: Highlight brightly
+            plot.layerRef.setStyle({
+                color: '#f59e0b',       // Amber/Gold border
+                weight: 4,              // Thicker border
+                fillColor: '#fcd34d',   // Yellow fill
+                fillOpacity: 0.8        // Less transparent
+            });
+            // Bring highlighted plots to the front so they aren't hidden under gray ones
+            if (plot.layerRef.bringToFront) {
+                plot.layerRef.bringToFront();
+            }
+        } else {
+            // OUT OF RANGE: Dim and gray out
+            plot.layerRef.setStyle({
+                color: '#9ca3af',       // Gray border
+                weight: 1,              // Thin border
+                fillColor: '#e5e7eb',   // Light gray fill
+                fillOpacity: 0.2        // Very transparent
+            });
+        }
+    });
+
+    // Show the "Clear" button so the user can reset the map
+    clearHighlightBtn.classList.remove('hidden');
+});
+
+clearHighlightBtn.addEventListener('click', () => {
+    // 1. Clear the input fields
+    minPriceInput.value = '';
+    maxPriceInput.value = '';
+    
+    // 2. Reset all plots back to your default map style
+    landLayersArray.forEach(plot => {
+        // NOTE: Adjust these colors if your default Leaflet polygons look different!
+        plot.layerRef.setStyle({
+            color: '#3388ff',       // Default Leaflet blue border
+            weight: 3,
+            fillColor: '#3388ff',   // Default Leaflet blue fill
+            fillOpacity: 0.2
+        });
+    });
+
+    // Hide the "Clear" button again
+    clearHighlightBtn.classList.add('hidden');
+});
+
+// =========================================================================
+// 3. HEATMAP LOGIC
+// =========================================================================
+
+// 1. Tighter visuals and a richer color gradient
+let heatLayer = L.heatLayer([], {
+    radius: 20,      // Smaller radius keeps hotspots from bleeding too far
+    blur: 12,        // Lower blur makes the colors much crisper and distinct
+    maxZoom: 16,     // Helps the heatmap aggregate better when zoomed out
+    gradient: { 
+        0.1: 'blue', 
+        0.3: 'cyan', 
+        0.5: 'lime',  // Added lime for mid-tier prices
+        0.7: 'yellow', 
+        1.0: 'red' 
+    }
+});
+let isHeatmapActive = false;
+
+document.getElementById('toggleHeatmapBtn').addEventListener('click', function() {
+    isHeatmapActive = !isHeatmapActive;
+    if (isHeatmapActive) {
+        this.classList.replace('bg-orange-100', 'bg-orange-600');
+        this.classList.replace('text-orange-700', 'text-white');
+        map.addLayer(heatLayer);
+        updateHeatmapData();
+    } else {
+        this.classList.replace('bg-orange-600', 'bg-orange-100');
+        this.classList.replace('text-white', 'text-orange-700');
+        map.removeLayer(heatLayer);
+    }
+});
+
+function updateHeatmapData() {
+    if (!isHeatmapActive) return;
+    
+    // 2. Sort prices to find a realistic maximum, ignoring massive outliers
+    const prices = landLayersArray
+        .map(p => Number(p.price) || 0)
+        .filter(price => price > 0)
+        .sort((a, b) => a - b);
+    
+    // Use the 90th percentile price as the "max" instead of the absolute max.
+    // This prevents one ultra-expensive plot from making everything else invisible.
+    let realisticMaxPrice = 1;
+    if (prices.length > 0) {
+        const percentileIndex = Math.floor(prices.length * 0.90);
+        realisticMaxPrice = prices[percentileIndex] || prices[prices.length - 1];
+    }
+    
+    const heatPoints = [];
+    
+    const filterStatus = document.getElementById('statusFilter').value;
+    const filterTownship = document.getElementById('townshipFilter').value; 
+    const filterQuarter = document.getElementById('quarterFilter').value;   
+
+    landLayersArray.forEach(plot => {
+        const matchesStatus = (filterStatus === 'all' || plot.status === filterStatus);
+        const matchesTownship = (filterTownship === 'all' || plot.township === filterTownship); 
+        const matchesQuarter = (filterQuarter === 'all' || plot.quarter === filterQuarter);   
+        
+        if (matchesStatus && matchesTownship && matchesQuarter) {
+            const center = plot.layerRef.getBounds().getCenter();
+            const price = Number(plot.price) || 0;
+            
+            // 3. Normalize intensity and ensure a minimum visibility of 0.25 (blue)
+            let intensity = price / realisticMaxPrice;
+            
+            // Cap at 1.0 (red) for properties above the 90th percentile
+            if (intensity > 1.0) intensity = 1.0; 
+            
+            // Boost the minimum visibility so cheap plots still show up as clear blue dots
+            if (price > 0 && intensity < 0.25) intensity = 0.25;
+
+            heatPoints.push([center.lat, center.lng, intensity]);
+        }
+    });
+
+    heatLayer.setLatLngs(heatPoints);
+}
+
 
 // =========================================================================
 // 4. MULTI-GRID MESHING OVERLAY ENGINE
@@ -914,21 +1143,7 @@ function loadGeoJsonToMap(importedGeoJson) {
                     const plotColor = metadata.color || (metadata.status === 'Archived' ? '#6c757d' : '#10b981');
                     if (layer.setStyle) layer.setStyle({ color: plotColor, fillColor: plotColor, fillOpacity: 0.5 });
 
-                    layer.bindPopup(`
-                        <div class="min-w-[200px]">
-                            ${metadata.imageBase64 ? `<img src="${metadata.imageBase64}" class="w-full h-32 object-cover rounded-t-md mb-2 border-b border-gray-200">` : ''}
-                            <div class="font-bold text-lg border-b pb-1 mb-2 text-gray-800 ${!metadata.imageBase64 ? 'mt-1' : ''}">${metadata.landId || 'Unnamed'}</div>
-                            <div class="grid grid-cols-2 gap-1 text-sm mb-2">
-                                <div class="text-gray-500">Status:</div>
-                                <div class="font-semibold ${metadata.status === 'Available' ? 'text-emerald-600' : 'text-gray-500'}">${metadata.status || 'Available'}</div>
-                                <div class="text-gray-500">Location:</div>
-                                <div class="text-gray-700">${metadata.number || ''} ${metadata.quarter || ''} ${metadata.township || ''}</div>
-                                <div class="text-gray-500">Price:</div>
-                                <div class="font-bold text-emerald-700">${metadata.price || 0} Lakhs</div>
-                            </div>
-                            ${metadata.remark ? `<div class="text-xs text-gray-500 italic border-t pt-1 mt-1 bg-gray-50 p-1 rounded"><i class="fas fa-info-circle mr-1"></i>${metadata.remark}</div>` : ''}
-                        </div>
-                    `);
+                   layer.bindPopup(generatePopupHTML(metadata, layer));
 
                     landLayersArray.push({
                         id: metadata.id || Date.now(), 

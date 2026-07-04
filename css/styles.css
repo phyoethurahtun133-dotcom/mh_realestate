@@ -39,3 +39,24 @@ body {
     z-index: 99999 !important;
     pointer-events: auto !important;
 }
+
+/* ==========================================================================
+   Leaflet Popup Fixes & Overrides
+   ========================================================================== */
+
+/* 1. Stop Leaflet from turning our custom button text blue */
+.leaflet-popup-content a {
+    color: inherit !important;
+}
+
+/* 2. Fix the popup width so it doesn't squish our Tailwind card */
+.leaflet-popup-content {
+    margin: 16px !important;
+    width: 260px !important;
+    line-height: normal !important;
+}
+
+/* 3. Remove Leaflet's default paragraph margins to prevent vertical stretching */
+.leaflet-popup-content p {
+    margin: 0 !important;
+}
