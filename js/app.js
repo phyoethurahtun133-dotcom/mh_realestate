@@ -3,7 +3,6 @@
 // =========================================================================
 const map = L.map('map', {
     zoomControl: false // Move zoom control to bottom right to avoid sidebar overlaps
-    maxZoom: 21 //Add this if it's missing to ensure the map container allows the higher zoom
 }).setView([16.8409, 96.1735], 12);
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
