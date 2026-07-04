@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#047857" />
+    </linearGradient>
+    
+    <pattern id="gisGrid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M 64 0 L 0 0 0 64" fill="none" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2" />
+    </pattern>
+
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.25" />
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect width="512" height="512" rx="112" fill="url(#gisGrid)" />
+
+  <g filter="url(#dropShadow)">
+    <polygon points="140,340 220,180 360,210 380,360 260,400" 
+             fill="rgba(255, 255, 255, 0.15)" 
+             stroke="#ffffff" 
+             stroke-width="8" 
+             stroke-linejoin="round" />
+    
+    <circle cx="140" cy="340" r="10" fill="#ffffff" />
+    <circle cx="220" cy="180" r="10" fill="#ffffff" />
+    <circle cx="360" cy="210" r="10" fill="#ffffff" />
+    <circle cx="380" cy="360" r="10" fill="#ffffff" />
+    <circle cx="260" cy="400" r="10" fill="#ffffff" />
+  </g>
+
+  <g filter="url(#dropShadow)" transform="translate(0, -20)">
+    <path d="M 256 120 C 211.8 120 176 155.8 176 200 C 176 260 256 350 256 350 C 256 350 336 260 336 200 C 336 155.8 300.2 120 256 120 Z" 
+          fill="#10B981" 
+          stroke="#ffffff" 
+          stroke-width="10" 
+          stroke-linejoin="round" />
+    <circle cx="256" cy="196" r="28" fill="#ffffff" />
+  </g>
+</svg>
