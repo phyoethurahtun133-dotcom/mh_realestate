@@ -25,6 +25,41 @@ if (savedCenter) {
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+// =========================================================================
+// NEW MAP OVERLAY LAYER (CUSTOM CONTROL)
+// =========================================================================
+const tourControl = L.control({ position: 'topright' }); // Positions: 'topleft', 'topright', 'bottomleft', 'bottomright'
+
+tourControl.onAdd = function(map) {
+    // 1. Create a container div for your overlay element
+    const container = L.DomUtil.create('div', 'leaflet-bar custom-map-overlay');
+    
+    // 2. Insert your custom HTML (e.g., your Cinematic Tour button)
+    container.innerHTML = `
+        <button id="startTourBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2.5 rounded-lg flex items-center gap-2 shadow-lg transition-all transform active:scale-95 text-sm">
+            <i class="fas fa-play"></i> <span>Cinematic Tour</span>
+        </button>
+    `;
+
+    // 3. CRUCIAL FOR MOBILE: Prevent map dragging/clicking when interacting with the button
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.disableScrollPropagation(container);
+
+    return container;
+};
+
+// 4. Mount it onto your active map instance
+tourControl.addTo(map);
+
+
+// --- Put your Event Listeners right below the control mounting ---
+document.body.addEventListener('click', function(e) {
+    // Safely hook event delegation since the element is injected dynamically
+    if (e.target.closest('#startTourBtn')) {
+        runCinematicTour(); // Executes your feature logic
+    }
+});
+
 // Add Location Control Button
 const locateControl = L.control({ position: 'bottomright' });
 
@@ -84,15 +119,24 @@ const satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/se
     crossOrigin: true // <-- Add this to allow the image exporter to read the satellite pixels
 });
 
+// NEW: Dark Mode Map Layer
+const darkMap = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap contributors © CARTO',
+    maxZoom: 22,
+    maxNativeZoom: 19,
+    crossOrigin: true
+});
+
 L.control.layers({
     "Street Map (Default)": streetMap,
-    "Satellite Imagery": satelliteMap
+    "Satellite Imagery": satelliteMap,
+    "Dark Mode Map": darkMap // Adds Dark Mode option to selector
 }).addTo(map);
 
 // Configure Geoman Drawing Toolbar Options
 map.pm.addControls({
     position: 'topleft',
-    drawMarker: false,
+    drawMarker: true,
     drawCircleMarker: false,
     drawPolyline: false,
     drawRectangle: true,
@@ -227,26 +271,37 @@ map.on('browser-print-start', function() {
 let landLayersArray = [];
 let temporarilyDrawnLayer = null;
 let editingPlotId = null; 
-let meshLayersArray = []; // <--- Add this new array for locked images
+let meshLayersArray = []; 
 
-// Sidebar Collapse Toggle
-document.getElementById('sidebarToggleBtn').addEventListener('click', function() {
-    const sidebar = document.getElementById('mainSidebar');
-    const icon = document.getElementById('sidebarToggleIcon');
+// Sidebar Logic
+const sidebar = document.getElementById('mainSidebar');
+const sidebarIcon = document.getElementById('sidebarToggleIcon');
+
+function toggleSidebar() {
     const isCollapsed = sidebar.style.marginLeft.includes('-');
 
     if (isCollapsed) {
         sidebar.style.marginLeft = '0px';
-        icon.classList.replace('fa-chevron-right', 'fa-chevron-left');
+        sidebarIcon.classList.replace('fa-chevron-right', 'fa-chevron-left');
     } else {
         const sidebarWidth = sidebar.offsetWidth;
         sidebar.style.marginLeft = `-${sidebarWidth}px`;
-        icon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+        sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
     }
 
     setTimeout(() => {
         map.invalidateSize();
     }, 300);
+}
+
+// Bind the click event to the button
+document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
+
+// NEW: Automatically collapse the sidebar as soon as the page loads
+window.addEventListener('DOMContentLoaded', () => {
+    const sidebarWidth = sidebar.offsetWidth;
+    sidebar.style.marginLeft = `-${sidebarWidth}px`;
+    sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
 });
 
 // Filters Collapse Toggle
@@ -282,9 +337,16 @@ document.getElementById('addRemarkBtn').addEventListener('click', function() {
 // HELPER: GENERATE POPUP HTML
 // =========================================================================
 function generatePopupHTML(plot, layer) {
-    // 1. Fixed Google Maps Directions URL
-    const center = layer.getBounds().getCenter();
-    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${center.lat},${center.lng}`;
+    // 1. Safely get the center coordinates (Polygons use bounds, Pins/Text use direct LatLng)
+    let center;
+    if (typeof layer.getBounds === 'function') {
+        center = layer.getBounds().getCenter();
+    } else {
+        center = layer.getLatLng();
+    }
+    
+    // (Also fixing the Google Maps URL format)
+    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${center.lat},${center.lng}`;
 
     // 2. Dynamic Status Badge Styling
     const isAvailable = (plot.status === 'Available');
@@ -341,25 +403,183 @@ function generatePopupHTML(plot, layer) {
     `;
 }
 
+// =========================================================================
+// CUSTOM PIN ICON & COLOR SELECTOR HANDLERS
+// =========================================================================
+document.querySelectorAll('.icon-choice').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.icon-choice').forEach(b => b.classList.remove('border-emerald-500', 'bg-emerald-50'));
+        this.classList.add('border-emerald-500', 'bg-emerald-50');
+        document.getElementById('selectedPinIcon').value = this.dataset.icon;
+    });
+});
+
+document.querySelectorAll('.color-choice').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.color-choice').forEach(b => b.classList.remove('ring-2', 'ring-offset-2', 'ring-emerald-500'));
+        this.classList.add('ring-2', 'ring-offset-2', 'ring-emerald-500');
+        document.getElementById('selectedPinColor').value = this.dataset.color;
+    });
+});
 
 // =========================================================================
 // 3. DRAWING & VECTOR PLOT MANAGEMENT
 // =========================================================================
+let currentLayerType = 'Polygon'; // 'Polygon' | 'Pin' | 'Text'
+
 map.on('pm:create', (e) => {
     temporarilyDrawnLayer = e.layer; 
-    temporarilyDrawnLayer._pmShape = e.shape; // Capture shape type (Polygon, Text, Rectangle, etc.)
+    temporarilyDrawnLayer._pmShape = e.shape;
     editingPlotId = null; 
     
     document.getElementById('metaForm').reset(); 
     document.getElementById('remarkInput').style.display = 'none';
     document.getElementById('addRemarkBtn').innerText = '+ Add Remark';
 
-    // If the user drew a Text element, auto-fill the Land ID input with their text
-    if (e.shape === 'Text' && e.layer.options.text) {
-        document.getElementById('landIdInput').value = e.layer.options.text;
+    // Identify current layer type
+    if (e.shape === 'Marker') {
+        currentLayerType = 'Pin';
+    } else if (e.shape === 'Text') {
+        currentLayerType = 'Text';
+        if (e.layer.options && e.layer.options.text) {
+            // FIX: Route the typed text to our new box, NOT the landIdInput
+            document.getElementById('textContentInput').value = e.layer.options.text;
+        }
+    } else {
+        currentLayerType = 'Polygon';
     }
 
+    // Show or hide the custom Pin styling UI section
+    const pinSection = document.getElementById('pinIconSection');
+    if (pinSection) {
+        if (currentLayerType === 'Pin') {
+            pinSection.classList.remove('hidden');
+        } else {
+            pinSection.classList.add('hidden');
+        }
+    }
+
+
+    // Toggle the visibility of the Icon Picker based on the layer type
+// Toggle the visibility of styling containers based on the active layer type
+    const markerStyles = document.getElementById('markerStylesContainer');
+    const textStyles = document.getElementById('textStylesContainer');
+
+    if (markerStyles) {
+        if (currentLayerType === 'Pin' || currentLayerType === 'Marker') {
+            markerStyles.classList.remove('hidden');
+        } else {
+            markerStyles.classList.add('hidden');
+        }
+    }
+
+    if (textStyles) {
+        if (currentLayerType === 'Text') {
+            textStyles.classList.remove('hidden');
+        } else {
+            textStyles.classList.add('hidden');
+        }
+    }
+
+
     document.getElementById('metaModal').style.display = 'flex';
+});
+
+// SINGLE, SAFE META-FORM SUBMIT LISTENER
+document.getElementById('metaForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+
+    let areaSqMeters = 0;
+    const geoJson = temporarilyDrawnLayer.toGeoJSON ? temporarilyDrawnLayer.toGeoJSON() : null;
+
+    if (geoJson && geoJson.geometry && (geoJson.geometry.type === 'Polygon' || geoJson.geometry.type === 'MultiPolygon')) {
+        areaSqMeters = turf.area(geoJson);
+    }
+
+    const areaSqFt = (areaSqMeters * 10.7639).toFixed(2);
+    const areaAcres = (areaSqMeters / 4046.86).toFixed(4);
+
+    const shapeType = temporarilyDrawnLayer._pmShape || (temporarilyDrawnLayer.pm ? temporarilyDrawnLayer.pm._shape : currentLayerType);
+    
+    // FIX: Read text values directly from your user text input box instead of Geoman options
+    // FIX: Read text values directly from your new dedicated text input box
+    // FIX: Read text values directly from your new dedicated text input box
+    const textContent = currentLayerType === 'Text' 
+        ? document.getElementById('textContentInput').value 
+        : null;
+
+    const pinIconEl = document.getElementById('selectedPinIcon');
+    const pinColorEl = document.getElementById('selectedPinColor');
+    const colorInput = document.getElementById('colorInput').value;
+
+    const pinConfig = currentLayerType === 'Pin' ? {
+        icon: pinIconEl ? pinIconEl.value : 'fa-map-marker-alt',
+        color: pinColorEl ? pinColorEl.value : colorInput
+    } : null;
+
+    // Capture Text Styles safely from your newly configured text block
+    const textConfig = currentLayerType === 'Text' ? {
+        color: document.getElementById('selectedTextColor') ? document.getElementById('selectedTextColor').value : '#0f172a',
+        size: document.getElementById('selectedTextSize') ? document.getElementById('selectedTextSize').value : '16px'
+    } : null;
+
+    const metadata = {
+        id: editingPlotId ? editingPlotId : Date.now(),
+        landId: document.getElementById('landIdInput').value,
+        price: document.getElementById('priceInput').value,
+        status: document.getElementById('statusInput').value,
+        color: colorInput, 
+        division: document.getElementById('divisionInput').value,
+        township: document.getElementById('townshipInput').value,
+        quarter: document.getElementById('quarterInput').value,
+        number: document.getElementById('numberInput').value,
+        remark: document.getElementById('remarkInput').value,
+        imageBase64: document.getElementById('plotImageBase64').value,
+        areaSqFt: areaSqFt,
+        areaAcres: areaAcres,
+        shapeType: shapeType,
+        textStyle: textConfig,
+        textContent: textContent,
+        type: currentLayerType,
+        pin: pinConfig,
+        layerRef: temporarilyDrawnLayer
+    };
+
+    // Apply Visual Styling Changes Symmetrically 
+    if (currentLayerType === 'Pin' && pinConfig) {
+        const iconHtml = `<div class="relative flex items-center justify-center" style="color: ${pinConfig.color}; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
+                            <i class="fas ${pinConfig.icon} text-2xl"></i>
+                          </div>`;
+        temporarilyDrawnLayer.setIcon(L.divIcon({
+            html: iconHtml,
+            className: 'custom-map-pin-icon',
+            iconSize: [30, 30],
+            iconAnchor: [15, 30]
+        }));
+        } else if (currentLayerType === 'Text' && textConfig && textContent) {
+            // Re-render text configurations perfectly on edits
+            temporarilyDrawnLayer.setIcon(L.divIcon({
+                className: 'custom-map-text-label',
+                html: `<div style="color: ${textConfig.color}; font-size: ${textConfig.size}; font-weight: bold; white-space: nowrap; text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9);">${textContent}</div>`,
+                iconSize: [0, 0] // Changed from null to [0, 0]
+            }));
+        } else {
+        colorCodeLayer(temporarilyDrawnLayer, metadata.color);
+    }
+
+    temporarilyDrawnLayer.bindPopup(generatePopupHTML(metadata, temporarilyDrawnLayer));
+
+    if (editingPlotId) {
+        const index = landLayersArray.findIndex(p => p.id === editingPlotId);
+        if (index !== -1) landLayersArray[index] = metadata;
+    } else {
+        landLayersArray.push(metadata);
+    }
+    
+    updateTownshipDropdown();
+    renderSidebarList();
+    if (typeof saveMapState === "function") saveMapState();
+    closeModal(); 
 });
 
 map.on('pm:remove', (e) => {
@@ -391,6 +611,30 @@ map.on('pm:globalremovalmodetoggled', (e) => {
 map.on('pm:globaleditmodetoggled', (e) => {
     if (!e.enabled && !map.dragging.enabled()) {
         map.dragging.enable();
+    }
+});
+
+// CRITICAL FIX: Ensure double-clicking and editing text updates the save state AND keeps format
+map.on('pm:textchange', (e) => {
+    const plotIndex = landLayersArray.findIndex(p => p.layerRef === e.layer);
+    
+    if (plotIndex !== -1) {
+        const plot = landLayersArray[plotIndex];
+        plot.textContent = e.text;
+        
+        // Geoman wipes the custom divIcon when edited natively. We must rebuild it:
+        const tColor = plot.textStyle?.color || '#0f172a';
+        const tSize = plot.textStyle?.size || '16px';
+        
+        setTimeout(() => {
+            e.layer.setIcon(L.divIcon({
+                className: 'custom-map-text-label',
+                html: `<div style="color: ${tColor}; font-size: ${tSize}; font-weight: bold; white-space: nowrap; text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9);">${e.text}</div>`,
+                iconSize: [0, 0]
+            }));
+            
+            if (typeof saveMapState === "function") saveMapState();
+        }, 10);
     }
 });
 
@@ -457,59 +701,6 @@ function colorCodeLayer(layer, customColor) {
     }
 }
 
-document.getElementById('metaForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    
-    let areaSqMeters = 0;
-    const geoJson = temporarilyDrawnLayer.toGeoJSON();
-    
-    if (geoJson.geometry.type === 'Polygon' || geoJson.geometry.type === 'MultiPolygon') {
-        areaSqMeters = turf.area(geoJson);
-    }
-
-    const areaSqFt = (areaSqMeters * 10.7639).toFixed(2);
-    const areaAcres = (areaSqMeters / 4046.86).toFixed(4);
-
-    // Extract text content if it's a Text layer
-    const shapeType = temporarilyDrawnLayer._pmShape || (temporarilyDrawnLayer.pm ? temporarilyDrawnLayer.pm._shape : 'Polygon');
-    const textContent = temporarilyDrawnLayer.options.text || (temporarilyDrawnLayer.pm && temporarilyDrawnLayer.pm.getText ? temporarilyDrawnLayer.pm.getText() : null);
-
-    const metadata = {
-        id: editingPlotId ? editingPlotId : Date.now(),
-        landId: document.getElementById('landIdInput').value,
-        price: document.getElementById('priceInput').value,
-        status: document.getElementById('statusInput').value,
-        color: document.getElementById('colorInput').value, 
-        division: document.getElementById('divisionInput').value,
-        township: document.getElementById('townshipInput').value,
-        quarter: document.getElementById('quarterInput').value,
-        number: document.getElementById('numberInput').value,
-        remark: document.getElementById('remarkInput').value,
-        imageBase64: document.getElementById('plotImageBase64').value,
-        areaSqFt: areaSqFt,
-        areaAcres: areaAcres,
-        shapeType: shapeType,
-        textContent: textContent,
-        layerRef: temporarilyDrawnLayer
-    };
-
-    temporarilyDrawnLayer.bindPopup(generatePopupHTML(metadata, temporarilyDrawnLayer));
-
-    colorCodeLayer(temporarilyDrawnLayer, metadata.color);
-
-    if (editingPlotId) {
-        const index = landLayersArray.findIndex(p => p.id === editingPlotId);
-        if (index !== -1) landLayersArray[index] = metadata;
-    } else {
-        landLayersArray.push(metadata);
-    }
-    
-    updateTownshipDropdown();
-    renderSidebarList();
-    saveMapState(); // <-- CRITICAL FIX: Save newly created/updated plot to localForage
-    closeModal(); 
-});
-
 // REPLACE your current plotImageInput listener with this:
 document.getElementById('plotImageInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
@@ -561,30 +752,80 @@ function openEditModal(id) {
     editingPlotId = id; 
     temporarilyDrawnLayer = plot.layerRef; 
 
-    document.getElementById('landIdInput').value = plot.landId;
-    document.getElementById('priceInput').value = plot.price;
-    document.getElementById('statusInput').value = plot.status;
-    document.getElementById('colorInput').value = plot.color || '#10b981'; 
-    document.getElementById('divisionInput').value = plot.division;
-    document.getElementById('townshipInput').value = plot.township;
-    document.getElementById('quarterInput').value = plot.quarter;
-    document.getElementById('numberInput').value = plot.number;
-    
-    // Load existing image if available
-    document.getElementById('plotImageBase64').value = plot.imageBase64 || '';
-    document.getElementById('plotImageInput').value = ''; // Reset UI file input
-
-    if (plot.remark) {
-        document.getElementById('remarkInput').value = plot.remark;
-        document.getElementById('remarkInput').style.display = 'block';
-        document.getElementById('addRemarkBtn').innerText = '- Remove Remark';
+    // Synchronize global layer type state for the editor path
+    if (plot.type === 'Pin' || plot.shapeType === 'Marker') {
+        currentLayerType = 'Pin';
+    } else if (plot.shapeType === 'Text' || plot.textContent) {
+        currentLayerType = 'Text';
     } else {
-        document.getElementById('remarkInput').value = '';
-        document.getElementById('remarkInput').style.display = 'none';
-        document.getElementById('addRemarkBtn').innerText = '+ Add Remark';
+        currentLayerType = 'Polygon';
     }
 
-    document.getElementById('metaModal').style.display = 'flex';
+    // Populate standard textual fields
+    document.getElementById('landIdInput').value = plot.landId || '';
+    document.getElementById('priceInput').value = plot.price || '';
+    document.getElementById('statusInput').value = plot.status || 'Available';
+    document.getElementById('colorInput').value = plot.color || '#10b981'; 
+    document.getElementById('divisionInput').value = plot.division || '';
+    document.getElementById('townshipInput').value = plot.township || '';
+    document.getElementById('quarterInput').value = plot.quarter || '';
+    document.getElementById('numberInput').value = plot.number || '';
+
+    // Handle styling panel view visibility toggles
+    const markerStyles = document.getElementById('markerStylesContainer');
+    const textStyles = document.getElementById('textStylesContainer');
+    
+    if (markerStyles) markerStyles.classList.add('hidden');
+    if (textStyles) textStyles.classList.add('hidden');
+
+    if (currentLayerType === 'Pin') {
+        if (markerStyles) {
+            markerStyles.classList.remove('hidden');
+            if (plot.pin) {
+                document.getElementById('selectedPinIcon').value = plot.pin.icon || 'fa-map-marker-alt';
+                document.getElementById('selectedPinColor').value = plot.pin.color || plot.color || '#10b981';
+            }
+        }
+            } else if (currentLayerType === 'Text') {
+                    if (textStyles) {
+                        textStyles.classList.remove('hidden');
+                        
+                        // FIX: Load the saved visual text into the new editor box
+                        document.getElementById('textContentInput').value = plot.textContent || '';
+                        
+                        if (plot.textStyle) {
+                            document.getElementById('selectedTextColor').value = plot.textStyle.color || '#0f172a';
+                            document.getElementById('selectedTextSize').value = plot.textStyle.size || '16px';
+                        }
+                    }
+                }
+
+    // Load existing image string if available
+    const imageBase64El = document.getElementById('plotImageBase64');
+    const imageInputEl = document.getElementById('plotImageInput');
+    if (imageBase64El) imageBase64El.value = plot.imageBase64 || '';
+    if (imageInputEl) imageInputEl.value = ''; 
+
+    // Handle remarks input section display
+    const remarkInput = document.getElementById('remarkInput');
+    const addRemarkBtn = document.getElementById('addRemarkBtn');
+    if (remarkInput && addRemarkBtn) {
+        if (plot.remark) {
+            remarkInput.value = plot.remark;
+            remarkInput.style.display = 'block';
+            addRemarkBtn.innerText = '- Remove Remark';
+        } else {
+            remarkInput.value = '';
+            remarkInput.style.display = 'none';
+            addRemarkBtn.innerText = '+ Add Remark';
+        }
+    }
+
+    // Make the edit modal visible
+    const metaModal = document.getElementById('metaModal');
+    if (metaModal) {
+        metaModal.style.display = 'flex';
+    }
 }
 
 function renderSidebarList() {
@@ -612,6 +853,7 @@ function renderSidebarList() {
         plot.layerRef.addTo(map);
 
         const item = document.createElement('div');
+        item.setAttribute('data-plot-id', plot.id); // <-- ADD THIS LINE HERE
         item.className = `bg-white p-4 mb-3 rounded-lg border shadow-sm hover:shadow-md cursor-pointer transition-shadow border-l-4 ${plot.status === 'Available' ? 'border-l-emerald-500 border-gray-200' : 'border-l-gray-400 border-gray-200'}`;
         
         item.innerHTML = `
@@ -633,20 +875,19 @@ function renderSidebarList() {
             </div>
         `;
         
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('.edit-btn')) {
-                openEditModal(plot.id);
-            } else {
-                map.fitBounds(plot.layerRef.getBounds());
-                plot.layerRef.openPopup();
-            }
-        });
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.edit-btn')) {
+                    openEditModal(plot.id);
+                } else {
+                    // Use the cinematic flight instead of instant snapping
+                    flyToPlotCinematically(plot);
+                }
+            });
 
         listContainer.appendChild(item);
     });
 
 // REPLACE the bottom of renderSidebarList() with this:
-    
     if (landLayersArray.length === 0) {
         // State 1: No properties exist on the map at all
         listContainer.innerHTML = `
@@ -665,6 +906,43 @@ function renderSidebarList() {
     updateHeatmapData();
 } // <-- End of renderSidebarList function
 
+// =========================================================================
+// SIDEBAR SELECTION HIGHLIGHT LOGIC
+// =========================================================================
+
+/**
+ * Highlights a property item in the sidebar and scrolls it into view.
+ * @param {number|string} plotId - Unique ID of the property plot
+ */
+function highlightSidebarItem(plotId) {
+    // 1. Remove the highlight styling from all sidebar items and reset them back to white
+    document.querySelectorAll('#propertyList [data-plot-id]').forEach(el => {
+        el.classList.remove('bg-emerald-50', 'border-emerald-500', 'ring-1', 'ring-emerald-500');
+        el.classList.add('bg-white');
+    });
+
+    // 2. Locate the active item in the sidebar
+    const targetItem = document.querySelector(`#propertyList [data-plot-id="${plotId}"]`);
+    if (targetItem) {
+        // 3. Apply the eye-catching emerald tint and accent border ring
+        targetItem.classList.remove('bg-white');
+        targetItem.classList.add('bg-emerald-50', 'border-emerald-500', 'ring-1', 'ring-emerald-500');
+        
+        // 4. Smoothly scroll the sidebar to center onto the highlighted item
+        targetItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+// Global hook: Catch whenever a popup is opened anywhere on the map
+map.on('popupopen', (e) => {
+    if (e.popup && e.popup._source) {
+        // Match the opened map layer reference to our internal data registry array
+        const plot = landLayersArray.find(p => p.layerRef === e.popup._source);
+        if (plot) {
+            highlightSidebarItem(plot.id);
+        }
+    }
+});
 
 function updateTownshipDropdown() {
     const townshipFilter = document.getElementById('townshipFilter');
@@ -709,6 +987,11 @@ function closeModal() {
     document.getElementById('plotImageInput').value = ''; // Clear file input UI
     editingPlotId = null;
     temporarilyDrawnLayer = null;
+
+    // CRITICAL FIX: Force-restore map dragging capabilities
+    if (map && map.dragging) {
+        map.dragging.enable();
+    }
 }
 
 document.getElementById('cancelBtn').addEventListener('click', () => {
@@ -755,9 +1038,9 @@ highlightPriceBtn.addEventListener('click', () => {
                 fillOpacity: 0.8        // Less transparent
             });
             // Bring highlighted plots to the front so they aren't hidden under gray ones
-            if (plot.layerRef.bringToFront) {
-                plot.layerRef.bringToFront();
-            }
+                if (typeof plot.layerRef.bringToFront === 'function') {
+                    plot.layerRef.bringToFront();
+                }
         } else {
             // OUT OF RANGE: Dim and gray out
             plot.layerRef.setStyle({
@@ -856,7 +1139,8 @@ function updateHeatmapData() {
         const matchesQuarter = (filterQuarter === 'all' || plot.quarter === filterQuarter);   
         
         if (matchesStatus && matchesTownship && matchesQuarter) {
-            const center = plot.layerRef.getBounds().getCenter();
+            const bounds = getSafeLayerBounds(plot.layerRef);
+            const center = bounds.getCenter();
             const price = Number(plot.price) || 0;
             
             // 3. Normalize intensity and ensure a minimum visibility of 0.25 (blue)
@@ -1187,7 +1471,13 @@ document.getElementById('exportBtn').addEventListener('click', () => {
             layerType: 'vectorPlot', id: plot.id, landId: plot.landId,
             price: plot.price, status: plot.status, color: plot.color, 
             division: plot.division, township: plot.township, quarter: plot.quarter,
-            number: plot.number, remark: plot.remark, imageBase64: plot.imageBase64 // <-- Added
+            number: plot.number, remark: plot.remark, imageBase64: plot.imageBase64,
+            shapeType: plot.shapeType || (plot.layerRef._pmShape) || null,
+            textContent: plot.textContent || (plot.layerRef.options ? plot.layerRef.options.text : null),
+            pin: plot.pin || null,
+            textStyle: plot.textStyle || null, // <-- ADD THIS LINE TO FIX THE REFRESH DROP
+            // FIX: Safely detect Text layers so they aren't converted to Pins or Polygons
+            type: plot.type || (plot.textContent ? 'Text' : (plot.shapeType === 'Marker' ? 'Pin' : 'Polygon'))
         };
         return geoJsonFeature;
     });
@@ -1227,10 +1517,15 @@ async function saveMapState() {
             division: plot.division, township: plot.township, quarter: plot.quarter,
             number: plot.number, remark: plot.remark, imageBase64: plot.imageBase64,
             shapeType: plot.shapeType || (plot.layerRef._pmShape) || null,
-            textContent: plot.textContent || (plot.layerRef.options ? plot.layerRef.options.text : null)
+            textContent: plot.textContent || (plot.layerRef.options ? plot.layerRef.options.text : null),
+            pin: plot.pin || null,
+            textStyle: plot.textStyle || null, // <-- ADD THIS LINE TO FIX THE REFRESH DROP
+            type: plot.type || (plot.shapeType === 'Marker' ? 'Pin' : 'Polygon')
         };
         return geoJsonFeature;
     });
+    
+    // ... rest of the localforage code stays the same
 
     const allMeshes = [...meshLayersArray];
     if (activeGridMeshLayer) allMeshes.push(activeGridMeshLayer);
@@ -1253,6 +1548,58 @@ async function saveMapState() {
     } catch (err) {
         console.error("Error saving map state:", err);
     }
+}
+
+/**
+ * Factory Converter to restore custom map layers from saved storage records
+ */
+function createLayerFromSchema(plotData) {
+    let newLayer;
+
+    if (plotData.type === 'Text' || plotData.shapeType === 'Text') {
+        // Dynamically fetch the saved text styling
+        const tColor = plotData.textStyle?.color || '#0f172a';
+        const tSize = plotData.textStyle?.size || '16px';
+        const tContent = plotData.textContent || plotData.landId || 'Text';
+
+        // Apply the same transparent background and text-shadow styling used elsewhere
+        const textHtml = `<div style="color: ${tColor}; font-size: ${tSize}; font-weight: bold; white-space: nowrap; text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9);">${tContent}</div>`;
+        
+        newLayer = L.marker(plotData.geometry, {
+            textMarker: true,
+            text: tContent,
+            icon: L.divIcon({
+                html: textHtml,
+                className: 'custom-map-text-label',
+                iconSize: [0, 0] // Set to [0,0] to prevent Leaflet's default offset box
+            })
+        });
+    } else if (plotData.type === 'Pin' || plotData.shapeType === 'Marker') {
+        const pinColor = plotData.pin?.color || plotData.color || '#10b981';
+        const pinIcon = plotData.pin?.icon || 'fa-map-marker-alt';
+        const iconHtml = `<div class="relative flex items-center justify-center" style="color: ${pinColor}; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
+                            <i class="fas ${pinIcon} text-2xl"></i>
+                          </div>`;
+        newLayer = L.marker(plotData.geometry, {
+            icon: L.divIcon({
+                html: iconHtml,
+                className: 'custom-map-pin-icon',
+                iconSize: [30, 30],
+                iconAnchor: [15, 30]
+            })
+        });
+    } else {
+        newLayer = L.geoJSON(plotData.geometry, {
+            style: {
+                color: plotData.color || '#10b981',
+                fillOpacity: 0.5
+            }
+        });
+    }
+
+    newLayer.bindPopup(generatePopupHTML(plotData, newLayer));
+    newLayer.addTo(map);
+    return newLayer;
 }
 
 function loadGeoJsonToMap(importedGeoJson) {
@@ -1285,38 +1632,90 @@ function loadGeoJsonToMap(importedGeoJson) {
         if (feature.geometry) {
             L.geoJSON(feature, {
                 // Intercept point creation: If it's a Text shape, create a Geoman Text Marker
-                pointToLayer: function(f, latlng) {
-                    if (f.properties && f.properties.shapeType === 'Text') {
-                        return L.marker(latlng, {
-                            textMarker: true,
-                            text: f.properties.textContent || f.properties.landId || 'Text'
-                        });
+                // REPLACE YOUR CURRENT pointToLayer WITH THIS:
+                    pointToLayer: function(f, latlng) {
+                        // FIX: Check `type` first. Geoman often defaults text shapeTypes to 'Marker', which breaks the restore logic.
+                        if (f.properties && (f.properties.type === 'Text' || f.properties.shapeType === 'Text')) {
+                            // Rebuild custom styled text
+                            const tColor = f.properties.textStyle?.color || '#0f172a';
+                            const tSize = f.properties.textStyle?.size || '16px';
+                            const tContent = f.properties.textContent || f.properties.landId || 'Text';
+                            
+                            return L.marker(latlng, {
+                                textMarker: true, 
+                                text: tContent, // <-- FIX: Crucial for Geoman so it doesn't erase text when re-editing
+                                icon: L.divIcon({
+                                    className: 'custom-map-text-label',
+                                    html: `<div style="color: ${tColor}; font-size: ${tSize}; font-weight: bold; white-space: nowrap; text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9);">${tContent}</div>`,
+                                    iconSize: [0, 0] // <-- FIX: Use [0,0] instead of null to prevent Leaflet from wrapping it in a default offset box
+                                })
+                            });
+                        } else if (f.properties && (f.properties.type === 'Pin' || f.properties.shapeType === 'Marker')) {
+                            // Rebuild the custom FontAwesome Pin
+                            const pinColor = f.properties.pin?.color || f.properties.color || '#10b981';
+                            const pinIcon = f.properties.pin?.icon || 'fa-map-marker-alt';
+                            const iconHtml = `<div class="relative flex items-center justify-center" style="color: ${pinColor}; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
+                                                <i class="fas ${pinIcon} text-2xl"></i>
+                                            </div>`;
+                            return L.marker(latlng, {
+                                icon: L.divIcon({
+                                    html: iconHtml,
+                                    className: 'custom-map-pin-icon',
+                                    iconSize: [30, 30],
+                                    iconAnchor: [15, 30]
+                                })
+                            });
+                        }
+                        return L.marker(latlng);
+                    },
+        onEachFeature: function(f, layer) {
+            const plotColor = metadata.color || (metadata.status === 'Archived' ? '#6c757d' : '#10b981');
+            
+            // Safely determine true layer type to catch texts before they load
+            const layerType = metadata.type || (metadata.textContent ? 'Text' : (metadata.shapeType === 'Marker' ? 'Pin' : null));
+
+            if (layerType === 'Text') {
+                // FIX: Forcefully re-apply custom styling to override Geoman's default reload wipe
+                const tColor = metadata.textStyle?.color || '#0f172a';
+                const tSize = metadata.textStyle?.size || '16px';
+                const tContent = metadata.textContent || metadata.landId || 'Text';
+                
+                // A tiny timeout ensures Geoman finishes its internal parsing first
+                setTimeout(() => {
+                    if (layer.setIcon) {
+                        layer.setIcon(L.divIcon({
+                            className: 'custom-map-text-label',
+                            html: `<div style="color: ${tColor}; font-size: ${tSize}; font-weight: bold; white-space: nowrap; text-shadow: 1px 1px 2px rgba(255,255,255,0.9), -1px -1px 2px rgba(255,255,255,0.9);">${tContent}</div>`,
+                            iconSize: [0, 0]
+                        }));
                     }
-                    return L.marker(latlng);
-                },
-                onEachFeature: function(f, layer) {
-                    const plotColor = metadata.color || (metadata.status === 'Archived' ? '#6c757d' : '#10b981');
-                    if (layer.setStyle) layer.setStyle({ color: plotColor, fillColor: plotColor, fillOpacity: 0.5 });
+                }, 50);
+            } else if (layerType !== 'Pin' && layer.setStyle) {
+                layer.setStyle({ color: plotColor, fillColor: plotColor, fillOpacity: 0.5 });
+            }
 
-                   layer.bindPopup(generatePopupHTML(metadata, layer));
+            layer.bindPopup(generatePopupHTML(metadata, layer));
 
-                    landLayersArray.push({
-                        id: metadata.id || Date.now(), 
-                        landId: metadata.landId || 'Unnamed',
-                        price: metadata.price || 0, 
-                        status: metadata.status || 'Available', 
-                        color: plotColor,
-                        division: metadata.division || 'Yangon', 
-                        township: metadata.township || '',
-                        quarter: metadata.quarter || '', 
-                        number: metadata.number || '', 
-                        remark: metadata.remark || '',
-                        imageBase64: metadata.imageBase64 || '',
-                        shapeType: metadata.shapeType || null,
-                        textContent: metadata.textContent || null,
-                        layerRef: layer 
-                    });
-                }
+            landLayersArray.push({
+                id: metadata.id || Date.now(), 
+                landId: metadata.landId || 'Unnamed',
+                price: metadata.price || 0, 
+                status: metadata.status || 'Available', 
+                color: plotColor,
+                division: metadata.division || 'Yangon', 
+                township: metadata.township || '',
+                quarter: metadata.quarter || '', 
+                number: metadata.number || '', 
+                pin: metadata.pin || null,
+                remark: metadata.remark || '',
+                imageBase64: metadata.imageBase64 || '',
+                shapeType: metadata.shapeType || null,
+                textStyle: metadata.textStyle || null,
+                textContent: metadata.textContent || null,
+                type: layerType, // Now correctly locking in the 'Text' type forever
+                layerRef: layer 
+            });
+        }
             }).addTo(map);
         }
     });
@@ -1448,6 +1847,169 @@ map.on('contextmenu', function(e) {
     }
 });
 
+/**
+ * Safely extracts geometric bounds from any Leaflet layer type (Polygon, Pin, Text)
+ */
+function getSafeLayerBounds(layer) {
+    if (typeof layer.getBounds === 'function') {
+        return layer.getBounds();
+    } else if (typeof layer.getLatLng === 'function') {
+        return L.latLngBounds(layer.getLatLng(), layer.getLatLng());
+    }
+    return map.getBounds();
+}
+
+// ==========================================
+// CINEMATIC TOUR & FLIGHT CONFIGURATION
+// ==========================================
+
+const FLIGHT_DURATION = 3.5; // Seconds spent flying between plots
+const VIEW_PAUSE = 4500;     // Milliseconds camera pauses to let user read popup
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+let isTourRunning = false;
+
+
+async function runCinematicTour() {
+    const tourBtn = document.getElementById('startTourBtn');
+
+    // 1. If tour is already running, click stops it immediately
+    if (isTourRunning) {
+        isTourRunning = false;
+        return;
+    }
+
+    // 2. FILTER AWARENESS: Only pick plots currently shown on map & matching price range
+    const isPriceHighlightActive = !document.getElementById('clearHighlightBtn').classList.contains('hidden');
+    const minPrice = parseFloat(document.getElementById('minPrice').value) || 0;
+    const maxPrice = parseFloat(document.getElementById('maxPrice').value) || Infinity;
+
+    const eligiblePlots = landLayersArray.filter(plot => {
+        // Must pass standard dropdown/search filters (i.e., still rendered on the map)
+        if (!map.hasLayer(plot.layerRef)) return false;
+
+        // If price highlighting is active, must fall within min/max Lakhs
+        if (isPriceHighlightActive) {
+            const price = parseFloat(plot.price) || 0;
+            if (price < minPrice || price > maxPrice) return false;
+        }
+
+        return true;
+    });
+
+    if (eligiblePlots.length === 0) {
+        alert("No visible properties match your current filters to tour!");
+        return;
+    }
+
+    // 3. START TOUR UI: Transform button into a Stop button
+    isTourRunning = true;
+    if (tourBtn) {
+        tourBtn.innerHTML = `<i class="fas fa-stop animate-pulse"></i> <span>Stop Tour (${eligiblePlots.length})</span>`;
+        tourBtn.classList.replace('bg-indigo-600', 'bg-red-600');
+        tourBtn.classList.replace('hover:bg-indigo-700', 'hover:bg-red-700');
+    }
+
+    // Auto-collapse sidebar for maximum full-screen immersion
+    const sidebar = document.getElementById('mainSidebar');
+    if (!sidebar.style.marginLeft.includes('-')) toggleSidebar();
+
+    // 4. THE TOUR LOOP
+    for (let i = 0; i < eligiblePlots.length; i++) {
+        // Exit early if user clicked "Stop Tour"
+        if (!isTourRunning) break;
+
+        const plot = eligiblePlots[i];
+        const layer = plot.layerRef;
+        if (!layer) continue;
+
+        // Capture original styles so we can restore them precisely
+        const originalStyle = {
+            color: plot.color || '#10b981',
+            fillColor: plot.color || '#10b981',
+            fillOpacity: isPriceHighlightActive ? 0.8 : 0.5,
+            weight: isPriceHighlightActive ? 4 : 3
+        };
+
+        // Close old popups
+        map.closePopup();
+
+        // Update button counter to show progress (e.g., "Stop Tour (2/5)")
+        if (tourBtn) {
+            tourBtn.querySelector('span').innerText = `Stop Tour (${i + 1}/${eligiblePlots.length})`;
+        }
+
+        // --- STEP A: Cinematic Swoop Flight ---
+        map.flyToBounds(getSafeLayerBounds(layer), {
+            animate: true,
+            duration: FLIGHT_DURATION,
+            easeLinearity: 0.2, // Swoops out slightly before diving in
+            maxZoom: 18
+        });
+
+        // Wait for flight to finish (+ 200ms landing cushion)
+        await delay((FLIGHT_DURATION * 1000) + 200);
+        if (!isTourRunning) break;
+
+        // --- STEP B: Showcase Highlight & Open Popup ---
+        if (layer.setStyle) {
+            layer.setStyle({
+                color: '#4F46E5',     // Indigo glowing highlight border
+                weight: 5,
+                fillColor: '#6366F1',
+                fillOpacity: 0.85
+            });
+            if (layer.bringToFront) layer.bringToFront();
+        }
+        layer.openPopup();
+
+        // --- STEP C: Hold camera so user can read metadata ---
+        await delay(VIEW_PAUSE);
+
+        // --- STEP D: Reset Plot Style ---
+        layer.closePopup();
+        if (layer.setStyle && isTourRunning) {
+            layer.setStyle(originalStyle);
+        }
+    }
+
+    // 5. FINISH TOUR UI: Restore original start button state
+    isTourRunning = false;
+    map.closePopup();
+    if (tourBtn) {
+        tourBtn.innerHTML = `<i class="fas fa-play"></i> <span>Cinematic Tour</span>`;
+        tourBtn.classList.replace('bg-red-600', 'bg-indigo-600');
+        tourBtn.classList.replace('hover:bg-red-700', 'hover:bg-indigo-700');
+    }
+
+    // Re-open sidebar when presentation ends
+    if (sidebar.style.marginLeft.includes('-')) toggleSidebar();
+}
+
+async function flyToPlotCinematically(plot) {
+    // If a tour is running, stop it before snapping to manual selection
+    if (isTourRunning) isTourRunning = false;
+
+    const layer = plot.layerRef;
+    if (!layer) return;
+
+    map.closePopup();
+
+    map.flyToBounds(getSafeLayerBounds(layer), {
+        animate: true,
+        duration: FLIGHT_DURATION,
+        easeLinearity: 0.2,
+        maxZoom: 18
+    });
+
+    await delay((FLIGHT_DURATION * 1000) + 200);
+    layer.openPopup();
+}
+
+
+// =========================================================================
+// SERVICE WORKER REGISTRATION (This should be the absolute final block)
+// =========================================================================
     // Register Service Worker in app.js
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {

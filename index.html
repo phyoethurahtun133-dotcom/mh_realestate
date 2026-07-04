@@ -29,9 +29,9 @@
     <link rel="apple-touch-icon" href="icons/icon-192.png">
 
 </head>
-<body class="bg-gray-100 h-screen overflow-hidden text-gray-800 flex">
+<body class="bg-gray-100 h-[100dvh] overflow-hidden text-gray-800 flex">
 
-    <aside id="mainSidebar" class="w-full md:w-[380px] bg-white shadow-xl z-[400] flex flex-col h-screen shrink-0 transition-all duration-300 relative border-r border-gray-200">
+    <aside id="mainSidebar" class="w-full md:w-[380px] bg-white shadow-xl z-[400] flex flex-col h-[100dvh] shrink-0 transition-all duration-300 relative border-r border-gray-200">
         
         <button id="sidebarToggleBtn" class="absolute top-1/2 -right-8 transform -translate-y-1/2 bg-white border border-gray-200 border-l-0 shadow-[4px_0_6px_rgba(0,0,0,0.1)] rounded-r-md py-4 px-2 text-gray-500 hover:text-emerald-600 focus:outline-none transition-colors">
             <i id="sidebarToggleIcon" class="fas fa-chevron-left"></i>
@@ -43,8 +43,9 @@
                 <p class="text-xs text-emerald-200 mt-1"><i class="fas fa-map-marked-alt mr-1"></i> Custom GIS Plotter</p>
             </div>
         </div>
+        
 
-        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[85vh] custom-scrollbar">
+        <div class="border-b border-gray-200 bg-gray-50 shrink-0 overflow-y-auto max-h-[90vh] custom-scrollbar">
             <button id="toggleFiltersBtn" class="w-full p-5 flex justify-between items-center text-left focus:outline-none select-none hover:bg-gray-100 transition-colors">
                 <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider">Filters & Tools</h2>
                 <i id="filterToggleIcon" class="fas fa-chevron-up text-gray-400 transition-transform duration-200"></i>
@@ -169,7 +170,7 @@
             </div>
         </div>
 
-        <div class="flex-grow overflow-y-auto p-3 bg-gray-100 custom-scrollbar" id="propertyList">
+        <div class="flex-1 min-h-0 overflow-y-auto p-3 bg-gray-100 custom-scrollbar" id="propertyList">
             <div class="text-center p-5 text-gray-400 text-sm mt-10">
                 <i class="fas fa-draw-polygon text-3xl mb-3 text-gray-300 block"></i>
                 Draw a plot on the map to begin.
@@ -177,7 +178,7 @@
         </div>
     </aside>
 
-    <main class="flex-grow h-screen relative z-0">
+    <main class="flex-grow h-[100dvh] relative z-0">
         <div id="map" class="w-full h-full"></div>
     </main>
 
@@ -250,10 +251,65 @@
                     <textarea id="remarkInput" rows="2" class="hidden w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm p-2 border" placeholder="Enter custom notes..."></textarea>
                 </div>
 
+                <div id="textStylesContainer" class="hidden mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                    <label class="block text-sm font-medium text-blue-800 mb-2 border-b border-blue-200 pb-1">Text Content & Appearance</label>
+                    
+                    <!-- NEW: Dedicated Map Text Input -->
+                    <div class="mb-3">
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Map Display Text</label>
+                        <input type="text" id="textContentInput" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" placeholder="Enter text to show on map...">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4 mt-2">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Text Size</label>
+                            <select id="selectedTextSize" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+                                <option value="12px">Small (12px)</option>
+                                <option value="16px" selected>Medium (16px)</option>
+                                <option value="20px">Large (20px)</option>
+                                <option value="28px">Extra Large (28px)</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-gray-500 mb-1">Text Color</label>
+                            <div class="flex items-center space-x-2">
+                                <input type="color" id="selectedTextColor" value="#0f172a" class="h-9 w-full rounded border-gray-300 cursor-pointer">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="markerStylesContainer" class="hidden mb-4 p-3 bg-gray-50 border border-gray-200 rounded-md">
+            <label class="block text-sm font-medium text-gray-800 mb-2 border-b pb-1">Marker Appearance</label>
+            <div class="grid grid-cols-2 gap-4 mt-2">
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Select Icon</label>
+                    <select id="selectedPinIcon" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500 sm:text-sm p-2 border">
+                        <option value="fa-map-marker-alt">📍 Standard Pin</option>
+                        <option value="fa-home">🏠 Home / House</option>
+                        <option value="fa-building">🏢 Building</option>
+                        <option value="fa-star">⭐ Star (Featured)</option>
+                        <option value="fa-tree">🌳 Land / Tree</option>
+                        <option value="fa-store">🏪 Shop / Commercial</option>
+                        <option value="fa-car">🚗 Parking / Garage</option>
+                        <option value="fa-exclamation-circle">❗ Important</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Marker Color</label>
+                    <div class="flex items-center space-x-2">
+                        <input type="color" id="selectedPinColor" value="#ef4444" class="h-9 w-full rounded border-gray-300 cursor-pointer">
+                    </div>
+                </div>
+            </div>
+        </div>
                 <div class="flex justify-between pt-4 border-t border-gray-200 mt-4">
                     <button type="button" id="cancelBtn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-bold py-2 px-4 rounded transition-colors">Discard</button>
                     <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold py-2 px-4 rounded transition-colors">Save Plot</button>
                 </div>
+                
             </form>
         </div>
     </div>
