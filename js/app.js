@@ -1,9 +1,25 @@
 // =========================================================================
 // 1. INITIALIZE MAP & CONTROLS
 // =========================================================================
+
+// Check if we are recovering from a print refresh
+const savedCenter = sessionStorage.getItem('printRecoveryCenter');
+const savedZoom = sessionStorage.getItem('printRecoveryZoom');
+
+// Determine starting coordinates (use saved if they exist, otherwise default)
+const startingCenter = savedCenter ? JSON.parse(savedCenter) : [16.8409, 96.1735];
+const startingZoom = savedZoom ? parseInt(savedZoom, 10) : 12;
+
 const map = L.map('map', {
-    zoomControl: false // Move zoom control to bottom right to avoid sidebar overlaps
-}).setView([16.8409, 96.1735], 12);
+    zoomControl: false,
+    preferCanvas: true   // Bundles all plots into an image so the print plugin doesn't crash
+}).setView(startingCenter, startingZoom);
+
+// Clean up session storage so standard refreshes behave normally
+if (savedCenter) {
+    sessionStorage.removeItem('printRecoveryCenter');
+    sessionStorage.removeItem('printRecoveryZoom');
+}
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
@@ -23,11 +39,27 @@ locateControl.onAdd = function(map) {
 locateControl.addTo(map);
 
 // Handle successful location finding
+// Add these variables right above the locationfound event
+let userLocMarker = null;
+let userLocCircle = null;
+
+// Handle successful location finding
 map.on('locationfound', function(e) {
     const radius = e.accuracy / 2;
-    L.marker(e.latlng).addTo(map)
+    
+    // 1. Remove the old marker and circle if they already exist
+    if (userLocMarker) {
+        map.removeLayer(userLocMarker);
+    }
+    if (userLocCircle) {
+        map.removeLayer(userLocCircle);
+    }
+
+    // 2. Create the new marker and circle, and save them to the variables
+    userLocMarker = L.marker(e.latlng).addTo(map)
         .bindPopup(`You are within ${radius} meters from this point`).openPopup();
-    L.circle(e.latlng, radius, { color: '#10b981', fillOpacity: 0.2 }).addTo(map);
+    
+    userLocCircle = L.circle(e.latlng, radius, { color: '#10b981', fillOpacity: 0.2 }).addTo(map);
 });
 
 // Handle location error
@@ -116,6 +148,44 @@ map.on('layeradd', function(e) {
     }
 });
 
+// Force map to redraw all vector layers and meshes after the print dialog closes
+// Safely ensure map exists before adding the listener
+// Force map to redraw all vector layers and meshes after the print dialog closes
+if (typeof map !== 'undefined') {
+    map.on('browser-print-end', async function(e) {
+        try {
+            // 1. Immediately save the exact current state of the map to localForage
+            if (typeof saveMapState === 'function') {
+                await saveMapState();
+            }
+
+            // === NEW: SAVE VIEWPORT TO SESSION STORAGE ===
+            const currentCenter = map.getCenter();
+            sessionStorage.setItem('printRecoveryCenter', JSON.stringify([currentCenter.lat, currentCenter.lng]));
+            sessionStorage.setItem('printRecoveryZoom', map.getZoom());
+            // =============================================
+
+            // 2. Perform an instant hard refresh to rebuild the corrupted Canvas DOM.
+            window.location.reload();
+            
+        } catch (error) {
+            console.error("Failed to recover map after printing:", error);
+        }
+    });
+}
+
+// Failsafe: If the print plugin crashes, prevent it from locking the UI
+map.on('browser-print-start', function() {
+    // If it gets stuck for more than 2 seconds, force-remove the invisible blocking layer
+    setTimeout(() => {
+        const blockingOverlay = document.querySelector('.leaflet-browser-print--custom');
+        if (blockingOverlay) {
+            blockingOverlay.style.pointerEvents = 'none';
+        }
+    }, 2000);
+});
+
+
 // =========================================================================
 // 2. STATE MANAGEMENT & SIDEBAR COLLAPSE
 // =========================================================================
@@ -191,7 +261,8 @@ function generatePopupHTML(plot, layer) {
     const locationString = [plot.number, plot.quarter, plot.township].filter(Boolean).join(', ') || 'Unknown Location';
 
     return `
-        <div class="w-[260px] font-sans">
+        <!-- FIX: Changed to min-w-[260px] and added pb-2 to expand the bottom edge -->
+        <div class="min-w-[260px] font-sans pb-2">
             ${plot.imageBase64 
                 ? `<img src="${plot.imageBase64}" class="w-full h-36 object-cover rounded-md mb-3 shadow-sm border border-gray-100" alt="Plot Image">` 
                 : ''}
@@ -226,9 +297,10 @@ function generatePopupHTML(plot, layer) {
                    </div>` 
                 : ''}
             
+            <!-- FIX: Added mb-1 to guarantee space between the button and the popup arrow -->
             <a href="${googleMapsUrl}" target="_blank" rel="noopener noreferrer" 
-               class="flex items-center justify-center w-full bg-blue-600 hover:bg-blue-700 !text-white transition-colors text-sm font-semibold py-2 px-4 rounded shadow-sm hover:shadow outline-none">
-                <i class="fas fa-directions mr-2 !text-blue-100"></i> Get Directions
+               class="flex items-center justify-center w-full bg-blue-600 hover:bg-blue-700 !text-white transition-colors text-sm font-semibold py-2 px-4 rounded shadow-sm hover:shadow outline-none mb-1">
+                <i class="fas fa-directions mr-2 text-white"></i> Get Directions
             </a>
         </div>
     `;
@@ -624,15 +696,16 @@ clearHighlightBtn.addEventListener('click', () => {
     minPriceInput.value = '';
     maxPriceInput.value = '';
     
-    // 2. Reset all plots back to your default map style
+    // 2. Reset all plots back to their specific custom colors
     landLayersArray.forEach(plot => {
-        // NOTE: Adjust these colors if your default Leaflet polygons look different!
-        plot.layerRef.setStyle({
-            color: '#3388ff',       // Default Leaflet blue border
-            weight: 3,
-            fillColor: '#3388ff',   // Default Leaflet blue fill
-            fillOpacity: 0.2
-        });
+        if (plot.layerRef.setStyle) {
+            plot.layerRef.setStyle({
+                color: plot.color || '#10b981',       // Use saved color, fallback to emerald
+                weight: 3,
+                fillColor: plot.color || '#10b981',   // Use saved color, fallback to emerald
+                fillOpacity: 0.5                      // Your default fill opacity
+            });
+        }
     });
 
     // Hide the "Clear" button again
