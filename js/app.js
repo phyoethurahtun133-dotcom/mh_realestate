@@ -16,7 +16,7 @@ locateControl.onAdd = function(map) {
     btn.title = "Find My Location";
     btn.onclick = function(e) {
         e.preventDefault();
-        map.locate({ setView: true, maxZoom: 16 });
+        map.locate({ setView: true, maxZoom: 20 });
     };
     return btn;
 };
@@ -38,12 +38,14 @@ map.on('locationerror', function(e) {
 // Base Map Switcher (Street vs Satellite)
 const streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors',
-    maxZoom: 19
+    maxZoom: 22,         // The new absolute zoom limit for the user
+    maxNativeZoom: 19    // Tells Leaflet to stretch tiles after level 19
 }).addTo(map);
 
 const satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
-    maxZoom: 19
+    maxZoom: 22,         // The new absolute zoom limit for the user
+    maxNativeZoom: 19    // Tells Leaflet to stretch tiles after level 19
 });
 
 L.control.layers({
