@@ -38,12 +38,12 @@ map.on('locationerror', function(e) {
 // Base Map Switcher (Street vs Satellite)
 const streetMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors',
-    maxZoom: 21
+    maxZoom: 19
 }).addTo(map);
 
 const satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri',
-    maxZoom: 21
+    maxZoom: 19
 });
 
 L.control.layers({
