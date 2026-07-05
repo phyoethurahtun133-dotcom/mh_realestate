@@ -274,19 +274,23 @@ let editingPlotId = null;
 let meshLayersArray = []; 
 
 // Sidebar Logic
+// Sidebar Logic
 const sidebar = document.getElementById('mainSidebar');
 const sidebarIcon = document.getElementById('sidebarToggleIcon');
+const topSidebarIcon = document.getElementById('topSidebarToggleIcon'); // <-- NEW
 
 function toggleSidebar() {
     const isCollapsed = sidebar.style.marginLeft.includes('-');
 
     if (isCollapsed) {
         sidebar.style.marginLeft = '0px';
-        sidebarIcon.classList.replace('fa-chevron-right', 'fa-chevron-left');
+        if (sidebarIcon) sidebarIcon.classList.replace('fa-chevron-right', 'fa-chevron-left');
+        if (topSidebarIcon) topSidebarIcon.classList.replace('fa-chevron-right', 'fa-chevron-left');
     } else {
         const sidebarWidth = sidebar.offsetWidth;
         sidebar.style.marginLeft = `-${sidebarWidth}px`;
-        sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+        if (sidebarIcon) sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+        if (topSidebarIcon) topSidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
     }
 
     setTimeout(() => {
@@ -294,15 +298,18 @@ function toggleSidebar() {
     }, 300);
 }
 
-// Bind the click event to the button
-document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
+// Bind the click event to both buttons
+document.getElementById('sidebarToggleBtn')?.addEventListener('click', toggleSidebar);
+document.getElementById('topSidebarToggleBtn')?.addEventListener('click', toggleSidebar); // <-- NEW
 
-// NEW: Automatically collapse the sidebar as soon as the page loads
+// Automatically collapse the sidebar as soon as the page loads
 window.addEventListener('DOMContentLoaded', () => {
     const sidebarWidth = sidebar.offsetWidth;
     sidebar.style.marginLeft = `-${sidebarWidth}px`;
-    sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+    if (sidebarIcon) sidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
+    if (topSidebarIcon) topSidebarIcon.classList.replace('fa-chevron-left', 'fa-chevron-right');
 });
+
 
 // Filters Collapse Toggle
 document.getElementById('toggleFiltersBtn').addEventListener('click', function() {
@@ -1159,9 +1166,8 @@ function updateHeatmapData() {
     heatLayer.setLatLngs(heatPoints);
 }
 
-
 // =========================================================================
-// 4. MULTI-GRID MESHING OVERLAY ENGINE
+// 4. MULTI-GRID MESHING OVERLAY ENGINE (UPGRADED TO WEBGL)
 // =========================================================================
 let activeGridMeshLayer = null;
 let meshControlMarkers = [];
@@ -1172,24 +1178,31 @@ L.GridMeshLayer = L.Layer.extend({
         this._imgUrl = imgUrl;
         this._cols = gridCols || 4; 
         this._rows = gridRows || 4; 
-        this._opacity = options.opacity || 0.75;
+        this._opacity = options && options.opacity ? options.opacity : 0.75;
         this._vertices = []; 
+        this._textureLoaded = false;
+        this._drawPending = false; // OPTIMIZATION: Track pending frames
     },
 
     onAdd: function (map) {
         this._map = map;
-        this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
-
-        // Ensure the overlay canvas doesn't block map panning/dragging beneath it
+        this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated custom-webgl-overlay');
         this._canvas.style.pointerEvents = 'none';
+        
+        this._gl = this._canvas.getContext('webgl', { premultipliedAlpha: false }) || 
+                   this._canvas.getContext('experimental-webgl');
 
-        this._ctx = this._canvas.getContext('2d');
         map.getPanes().overlayPane.appendChild(this._canvas);
         
+        this._initWebGL(this._gl);
+
         this._img = new Image();
+        this._img.crossOrigin = "anonymous";
         this._img.onload = () => {
+            this._texture = this._loadTexture(this._gl, this._img);
+            this._textureLoaded = true;
             this._initGridVertices();
-            this.draw();
+            this.scheduleDraw(); // Use new rAF method
         };
         this._img.src = this._imgUrl;
 
@@ -1202,9 +1215,83 @@ L.GridMeshLayer = L.Layer.extend({
         map.off('zoom reset viewreset moveend', this._reset, this);
     },
 
+    // --- OPTIMIZATION 1: Screen Refresh Sync ---
+    scheduleDraw: function() {
+        if (!this._drawPending) {
+            this._drawPending = true;
+            requestAnimationFrame(() => {
+                this.draw();
+                this._drawPending = false;
+            });
+        }
+    },
+
+    _initWebGL: function(gl) {
+        const vsSource = `
+            attribute vec2 a_position;
+            attribute vec2 a_texCoord;
+            uniform vec2 u_resolution;
+            varying vec2 v_texCoord;
+            void main() {
+                vec2 zeroToOne = a_position / u_resolution;
+                vec2 zeroToTwo = zeroToOne * 2.0;
+                vec2 clipSpace = zeroToTwo - 1.0;
+                gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+                v_texCoord = a_texCoord;
+            }
+        `;
+
+        const fsSource = `
+            precision mediump float;
+            uniform sampler2D u_image;
+            uniform float u_opacity;
+            varying vec2 v_texCoord;
+            void main() {
+                vec4 color = texture2D(u_image, v_texCoord);
+                gl_FragColor = vec4(color.rgb, color.a * u_opacity);
+            }
+        `;
+
+        const vertexShader = this._createShader(gl, gl.VERTEX_SHADER, vsSource);
+        const fragmentShader = this._createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+        this._program = this._createProgram(gl, vertexShader, fragmentShader);
+        
+        this._positionBuffer = gl.createBuffer();
+        this._texCoordBuffer = gl.createBuffer(); // This will now hold static data
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    },
+
+    // ... (Keep _createShader, _createProgram, _loadTexture exactly the same) ...
+    _createShader: function(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        return shader;
+    },
+    _createProgram: function(gl, vertexShader, fragmentShader) {
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        return program;
+    },
+    _loadTexture: function(gl, image) {
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        return texture;
+    },
+
+    // --- Interaction Math ---
     setOpacity: function (opacity) {
         this._opacity = opacity;
-        this.draw();
+        this.scheduleDraw();
     },
 
     moveBy: function (dLat, dLng) {
@@ -1212,20 +1299,19 @@ L.GridMeshLayer = L.Layer.extend({
             vert.latlng = L.latLng(vert.latlng.lat + dLat, vert.latlng.lng + dLng);
         });
         this._syncMarkers();
-        this.draw();
+        this.scheduleDraw();
     },
 
     scaleBy: function (scaleFactor) {
         if (scaleFactor <= 0) return;
         const center = this._getCentroid();
-
         this._vertices.forEach(vert => {
             const dLat = vert.latlng.lat - center.lat;
             const dLng = vert.latlng.lng - center.lng;
             vert.latlng = L.latLng(center.lat + (dLat * scaleFactor), center.lng + (dLng * scaleFactor));
         });
         this._syncMarkers();
-        this.draw();
+        this.scheduleDraw();
     },
 
     rotateBy: function (angleDegrees) {
@@ -1233,14 +1319,78 @@ L.GridMeshLayer = L.Layer.extend({
         const cos = Math.cos(rad);
         const sin = Math.sin(rad);
         const center = this._getCentroid();
-
         this._vertices.forEach(vert => {
             const x = (vert.latlng.lng - center.lng) * cos - (vert.latlng.lat - center.lat) * sin;
             const y = (vert.latlng.lng - center.lng) * sin + (vert.latlng.lat - center.lat) * cos;
             vert.latlng = L.latLng(center.lat + y, center.lng + x);
         });
         this._syncMarkers();
-        this.draw();
+        this.scheduleDraw();
+    },
+
+    setResolution: function (newResolution) {
+        if (!this._vertices || this._vertices.length === 0) {
+            this._cols = newResolution;
+            this._rows = newResolution;
+            this._initGridVertices();
+            return;
+        }
+
+        // ... (Keep the whole bilinear interpolation block exactly as it was) ...
+        const oldCols = this._cols;
+        const oldRows = this._rows;
+        const oldVertices = [...this._vertices];
+        const newVertices = [];
+        const getOldVert = (col, row) => {
+            const safeCol = Math.max(0, Math.min(col, oldCols));
+            const safeRow = Math.max(0, Math.min(row, oldRows));
+            return oldVertices[safeRow * (oldCols + 1) + safeCol];
+        };
+
+        for (let r = 0; r <= newResolution; r++) {
+            const v = r / newResolution; 
+            const oldRowExact = v * oldRows;
+            const r0 = Math.floor(oldRowExact);
+            const r1 = Math.min(r0 + 1, oldRows);
+            const fr = oldRowExact - r0;
+
+            for (let c = 0; c <= newResolution; c++) {
+                const u = c / newResolution; 
+                const oldColExact = u * oldCols;
+                const c0 = Math.floor(oldColExact);
+                const c1 = Math.min(c0 + 1, oldCols);
+                const fc = oldColExact - c0;
+
+                const v00 = getOldVert(c0, r0), v01 = getOldVert(c1, r0);
+                const v10 = getOldVert(c0, r1), v11 = getOldVert(c1, r1);
+                if (!v00 || !v01 || !v10 || !v11) continue;
+
+                const latTop = v00.latlng.lat * (1 - fc) + v01.latlng.lat * fc;
+                const latBot = v10.latlng.lat * (1 - fc) + v11.latlng.lat * fc;
+                const interpLat = latTop * (1 - fr) + latBot * fr;
+
+                const lngTop = v00.latlng.lng * (1 - fc) + v01.latlng.lng * fc;
+                const lngBot = v10.latlng.lng * (1 - fc) + v11.latlng.lng * fc;
+                const interpLng = lngTop * (1 - fr) + lngBot * fr;
+
+                newVertices.push({ latlng: L.latLng(interpLat, interpLng), u: u, v: v });
+            }
+        }
+
+        this._cols = newResolution;
+        this._rows = newResolution;
+        this._vertices = newVertices;
+        
+        // Re-allocate our optimized buffers for the new grid size
+        this._allocateBuffers();
+        this.scheduleDraw();
+    },
+
+    updateVertex: function (index, latlng) {
+        if (this._vertices[index]) {
+            this._vertices[index].latlng = latlng;
+            this.scheduleDraw();
+        }
     },
 
     _getCentroid: function () {
@@ -1274,71 +1424,180 @@ L.GridMeshLayer = L.Layer.extend({
                 this._vertices.push({ latlng: L.latLng(lat, lng), u: u, v: v });
             }
         }
+        
+        this._allocateBuffers();
         this.fire('meshReady');
     },
 
+// --- OPTIMIZATION 2: Pre-allocate Memory for a Subdivided Mesh (CORRECTED) ---
+    _allocateBuffers: function() {
+        this._subdivisions = 6; 
+        
+        const renderCols = this._cols * this._subdivisions;
+        const renderRows = this._rows * this._subdivisions;
+        
+        const numQuads = renderCols * renderRows;
+        const numVertices = numQuads * 6; // 2 triangles per sub-quad
+        
+        // Pre-allocate the massive arrays for the GPU
+        this._positionsArray = new Float32Array(numVertices * 2); 
+        const texCoordsArray = new Float32Array(numVertices * 2); 
+
+        let i = 0;
+        const subs = this._subdivisions;
+        
+        // CRITICAL FIX: The loop structure here MUST exactly match 
+        // the chunk-by-chunk loop structure in the draw() method!
+        for (let r = 0; r < this._rows; r++) {
+            for (let c = 0; c < this._cols; c++) {
+                
+                // Tessellation sub-loop
+                for (let sr = 0; sr < subs; sr++) {
+                    for (let sc = 0; sc < subs; sc++) {
+                        
+                        // Calculate global sub-grid index to map to the image perfectly
+                        const globalCol = (c * subs) + sc;
+                        const globalRow = (r * subs) + sr;
+
+                        // Map to a 0.0 -> 1.0 UV space
+                        const u1 = globalCol / renderCols;
+                        const v1 = globalRow / renderRows;
+                        const u2 = (globalCol + 1) / renderCols;
+                        const v2 = (globalRow + 1) / renderRows;
+
+                        // Triangle 1 UVs
+                        texCoordsArray[i] = u1;     texCoordsArray[i+1] = v1;
+                        texCoordsArray[i+2] = u2;   texCoordsArray[i+3] = v1;
+                        texCoordsArray[i+4] = u1;   texCoordsArray[i+5] = v2;
+                        
+                        // Triangle 2 UVs
+                        texCoordsArray[i+6] = u2;   texCoordsArray[i+7] = v1;
+                        texCoordsArray[i+8] = u2;   texCoordsArray[i+9] = v2;
+                        texCoordsArray[i+10] = u1;  texCoordsArray[i+11] = v2;
+                        
+                        i += 12; // Advance index by 12 (6 vertices * 2 coordinates)
+                    }
+                }
+            }
+        }
+        
+        const gl = this._gl;
+        if (gl && this._texCoordBuffer) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, this._texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, texCoordsArray, gl.STATIC_DRAW);
+            const texCoordLocation = gl.getAttribLocation(this._program, "a_texCoord");
+            gl.enableVertexAttribArray(texCoordLocation);
+            gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+        }
+    },
+
+    
     _reset: function () {
         const topLeft = this._map.containerPointToLayerPoint([0, 0]);
         L.DomUtil.setPosition(this._canvas, topLeft);
         const size = this._map.getSize();
         this._canvas.width = size.x;
         this._canvas.height = size.y;
-        this.draw();
+        
+        if (this._gl) {
+            this._gl.viewport(0, 0, size.x, size.y);
+        }
+        this.scheduleDraw();
     },
 
+    // --- OPTIMIZATION 3: High-Performance Curved Draw Loop ---
     draw: function () {
-        if (!this._img || !this._img.complete || this._vertices.length === 0) return;
-        const ctx = this._ctx;
-        ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
-        ctx.globalAlpha = this._opacity;
+        if (!this._gl || !this._textureLoaded || this._vertices.length === 0 || !this._positionsArray) return;
+        
+        const gl = this._gl;
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
 
-        const w = this._img.naturalWidth;
-        const h = this._img.naturalHeight;
+        let i = 0; 
         const getVert = (c, r) => this._vertices[r * (this._cols + 1) + c];
+        const subs = this._subdivisions;
 
+        // Loop through the SPARSE control quads (the purple dots)
         for (let r = 0; r < this._rows; r++) {
             for (let c = 0; c < this._cols; c++) {
-                const v1 = getVert(c, r);
-                const v2 = getVert(c + 1, r);
-                const v3 = getVert(c, r + 1);
-                const v4 = getVert(c + 1, r + 1);
+                const vTL = getVert(c, r);       // Top-Left
+                const vTR = getVert(c + 1, r);   // Top-Right
+                const vBL = getVert(c, r + 1);   // Bottom-Left
+                const vBR = getVert(c + 1, r + 1); // Bottom-Right
 
-                this._drawTriangle(ctx, this._img, v1, v2, v3, w, h);
-                this._drawTriangle(ctx, this._img, v2, v4, v3, w, h);
+                if (!vTL || !vTR || !vBL || !vBR) continue;
+
+                const pTL = this._map.latLngToContainerPoint(vTL.latlng);
+                const pTR = this._map.latLngToContainerPoint(vTR.latlng);
+                const pBL = this._map.latLngToContainerPoint(vBL.latlng);
+                const pBR = this._map.latLngToContainerPoint(vBR.latlng);
+
+                // Tessellation Loop: Generate the curved DENSE grid inside this quad
+                for (let sr = 0; sr < subs; sr++) {
+                    // Vertical interpolation percentages
+                    const vFrac1 = sr / subs;
+                    const vFrac2 = (sr + 1) / subs;
+
+                    // Interpolate the left and right edges
+                    const leftX1 = pTL.x + (pBL.x - pTL.x) * vFrac1;
+                    const leftY1 = pTL.y + (pBL.y - pTL.y) * vFrac1;
+                    const rightX1 = pTR.x + (pBR.x - pTR.x) * vFrac1;
+                    const rightY1 = pTR.y + (pBR.y - pTR.y) * vFrac1;
+
+                    const leftX2 = pTL.x + (pBL.x - pTL.x) * vFrac2;
+                    const leftY2 = pTL.y + (pBL.y - pTL.y) * vFrac2;
+                    const rightX2 = pTR.x + (pBR.x - pTR.x) * vFrac2;
+                    const rightY2 = pTR.y + (pBR.y - pTR.y) * vFrac2;
+
+                    for (let sc = 0; sc < subs; sc++) {
+                        // Horizontal interpolation percentages
+                        const uFrac1 = sc / subs;
+                        const uFrac2 = (sc + 1) / subs;
+
+                        // Final Bilinear Sub-Points
+                        const px1 = leftX1 + (rightX1 - leftX1) * uFrac1;
+                        const py1 = leftY1 + (rightY1 - leftY1) * uFrac1;
+                        
+                        const px2 = leftX1 + (rightX1 - leftX1) * uFrac2;
+                        const py2 = leftY1 + (rightY1 - leftY1) * uFrac2;
+                        
+                        const px3 = leftX2 + (rightX2 - leftX2) * uFrac1;
+                        const py3 = leftY2 + (rightY2 - leftY2) * uFrac1;
+                        
+                        const px4 = leftX2 + (rightX2 - leftX2) * uFrac2;
+                        const py4 = leftY2 + (rightY2 - leftY2) * uFrac2;
+
+                        // Push the tiny, smooth triangles to the GPU array
+                        // Triangle 1
+                        this._positionsArray[i++] = px1; this._positionsArray[i++] = py1;
+                        this._positionsArray[i++] = px2; this._positionsArray[i++] = py2;
+                        this._positionsArray[i++] = px3; this._positionsArray[i++] = py3;
+
+                        // Triangle 2
+                        this._positionsArray[i++] = px2; this._positionsArray[i++] = py2;
+                        this._positionsArray[i++] = px4; this._positionsArray[i++] = py4;
+                        this._positionsArray[i++] = px3; this._positionsArray[i++] = py3;
+                    }
+                }
             }
         }
-    },
 
-    _drawTriangle: function (ctx, img, vA, vB, vC, imgW, imgH) {
-        const pA = this._map.latLngToContainerPoint(vA.latlng);
-        const pB = this._map.latLngToContainerPoint(vB.latlng);
-        const pC = this._map.latLngToContainerPoint(vC.latlng);
+        gl.useProgram(this._program);
 
-        const sAx = vA.u * imgW, sAy = vA.v * imgH;
-        const sBx = vB.u * imgW, sBy = vB.v * imgH;
-        const sCx = vC.u * imgW, sCy = vC.v * imgH;
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._positionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, this._positionsArray, gl.DYNAMIC_DRAW); 
+        
+        const positionLocation = gl.getAttribLocation(this._program, "a_position");
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(pA.x, pA.y);
-        ctx.lineTo(pB.x, pB.y);
-        ctx.lineTo(pC.x, pC.y);
-        ctx.closePath();
-        ctx.clip();
+        const resolutionLocation = gl.getUniformLocation(this._program, "u_resolution");
+        gl.uniform2f(resolutionLocation, gl.canvas.width, gl.canvas.height);
 
-        const denom = (sAx * (sBy - sCy) + sBx * (sCy - sAy) + sCx * (sAy - sBy));
-        if (Math.abs(denom) < 0.0001) { ctx.restore(); return; }
+        const opacityLocation = gl.getUniformLocation(this._program, "u_opacity");
+        gl.uniform1f(opacityLocation, this._opacity);
 
-        const m11 = (pA.x * (sBy - sCy) + pB.x * (sCy - sAy) + pC.x * (sAy - sBy)) / denom;
-        const m12 = (pA.y * (sBy - sCy) + pB.y * (sCy - sAy) + pC.y * (sAy - sBy)) / denom;
-        const m21 = (pA.x * (sCx - sBx) + pB.x * (sAx - sCx) + pC.x * (sBx - sAx)) / denom;
-        const m22 = (pA.y * (sCx - sBx) + pB.y * (sAx - sCx) + pC.y * (sBx - sAx)) / denom;
-        const dx  = (pA.x * (sBx * sCy - sCx * sBy) + pB.x * (sCx * sAy - sAx * sCy) + pC.x * (sAx * sBy - sBx * sAy)) / denom;
-        const dy  = (pA.y * (sBx * sCy - sCx * sBy) + pB.y * (sCx * sAy - sAx * sCy) + pC.y * (sAx * sBy - sBx * sAy)) / denom;
-
-        ctx.setTransform(m11, m12, m21, m22, dx, dy);
-        ctx.drawImage(img, 0, 0);
-        ctx.restore();
+        gl.drawArrays(gl.TRIANGLES, 0, this._positionsArray.length / 2);
     }
 });
 
@@ -1346,22 +1605,60 @@ L.GridMeshLayer = L.Layer.extend({
 function updateGridResolution(newCols, newRows) {
     if (!activeGridMeshLayer) return;
 
-    // 1. Capture current image data (if you need to preserve state)
     const imgUrl = activeGridMeshLayer._imgUrl;
     const opacity = activeGridMeshLayer._opacity;
 
-    // 2. Clear old mesh and markers
     removeActiveImageOverlay();
 
-    // 3. Re-create with new density
     activeGridMeshLayer = new L.GridMeshLayer(imgUrl, null, newCols, newRows, { opacity: opacity });
     map.addLayer(activeGridMeshLayer);
 
-    // 4. Re-bind the meshReady event as shown in your existing upload code
-    // (Ensure you call the marker creation logic again here)
     activeGridMeshLayer.on('meshReady', () => {
-        // ... (Insert your marker generation loop here)
+        // Handled naturally via the main listeners now
     });
+}
+
+// Helper: Remove active image overlay cleanly
+// =========================================================================
+// OVERLAY ENGINE TRACKERS & HELPER FUNCTIONS
+// =========================================================================
+let currentTotalRotation = 0;
+let currentTotalScale = 1.0;
+let selectedMeshMarker = null;
+
+// Helper: Factory to create interactive, clickable mesh dots
+function buildMeshMarker(vert, index) {
+    const marker = L.marker(vert.latlng, {
+        draggable: true,
+        pmIgnore: true, 
+        icon: L.divIcon({
+            className: 'mesh-handle',
+            html: `<div style="background:#9333ea; width:12px; height:12px; border:2px solid white; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.6); cursor:grab;"></div>`,
+            iconSize: [12, 12],
+            iconAnchor: [6, 6]
+        })
+    }).addTo(map);
+
+    marker.vertexIndex = index;
+
+    // Drag behavior
+    // Inside buildMeshMarker() and your Right-Click map.on('contextmenu', ...)
+    marker.on('drag', function(dragEvent) {
+        vert.latlng = dragEvent.target.getLatLng();
+        activeGridMeshLayer.scheduleDraw(); // <--- Changed from activeGridMeshLayer.draw()
+    });
+
+    // Click selection behavior for 1px keyboard nudging
+    marker.on('click', function(e) {
+        L.DomEvent.stopPropagation(e);
+        if (selectedMeshMarker) {
+            selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '2px solid white');
+        }
+        selectedMeshMarker = marker;
+        selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '3px solid #facc15'); // Yellow ring
+    });
+
+    return marker;
 }
 
 // Helper: Remove active image overlay cleanly
@@ -1372,9 +1669,18 @@ function removeActiveImageOverlay() {
     }
     meshControlMarkers.forEach(m => map.removeLayer(m));
     meshControlMarkers = [];
+    selectedMeshMarker = null;
     
     document.getElementById('opacityControlBlock').classList.add('hidden');
     document.getElementById('globalControls').classList.add('hidden');
+
+    // Reset UI State
+    currentTotalRotation = 0;
+    currentTotalScale = 1.0;
+    document.getElementById('overlayRotateSlider').value = 0;
+    document.getElementById('rotationVal').innerText = '0°';
+    document.getElementById('overlayScaleSlider').value = 100;
+    document.getElementById('scaleVal').innerText = '100%';
 }
 
 // Upload Image Listener
@@ -1386,30 +1692,15 @@ document.getElementById('overlayImageInput').addEventListener('change', function
     reader.onload = function(event) {
         removeActiveImageOverlay();
 
-        // To something like this:
-        const newGridCols = 8; // Change this to your desired number of columns
-        const newGridRows = 8; // Change this to your desired number of rows
-        activeGridMeshLayer = new L.GridMeshLayer(event.target.result, null, newGridCols, newGridRows, { opacity: 0.75 });
+        const densitySelect = document.getElementById('gridDensitySelect');
+        const resolution = densitySelect ? parseInt(densitySelect.value, 10) : 4;
+
+        activeGridMeshLayer = new L.GridMeshLayer(event.target.result, null, resolution, resolution, { opacity: 0.75 });
         map.addLayer(activeGridMeshLayer);
 
         activeGridMeshLayer.on('meshReady', () => {
-            activeGridMeshLayer._vertices.forEach((vert) => {
-                const marker = L.marker(vert.latlng, {
-                    draggable: true,
-                    pmIgnore: true, 
-                    icon: L.divIcon({
-                        className: 'mesh-handle',
-                        html: `<div style="background:#9333ea; width:12px; height:12px; border:2px solid white; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.6); cursor:grab;"></div>`,
-                        iconSize: [12, 12],
-                        iconAnchor: [6, 6]
-                    })
-                }).addTo(map);
-
-                marker.on('drag', function(dragEvent) {
-                    vert.latlng = dragEvent.target.getLatLng();
-                    activeGridMeshLayer.draw();
-                });
-
+            activeGridMeshLayer._vertices.forEach((vert, idx) => {
+                const marker = buildMeshMarker(vert, idx);
                 meshControlMarkers.push(marker);
             });
         });
@@ -1424,34 +1715,123 @@ document.getElementById('overlayImageInput').addEventListener('change', function
     this.value = '';
 });
 
-// Bind UI Action Buttons for Overlay
-document.getElementById('btnLockOverlay').addEventListener('click', () => {
+// Grid Density Change Listener
+// Grid Density Change Listener
+document.getElementById('gridDensitySelect')?.addEventListener('change', function(e) {
+    if (!activeGridMeshLayer) return;
+    const newRes = parseInt(e.target.value, 10);
+    
+    // 1. Remove old purple control dots from the map
+    meshControlMarkers.forEach(m => map.removeLayer(m));
+    meshControlMarkers = [];
+    selectedMeshMarker = null;
+
+    // 2. Interpolate the mesh coordinates to the new grid density
+    activeGridMeshLayer.setResolution(newRes);
+
+    // 3. Spawn interactive dots at the new interpolated coordinates
+    activeGridMeshLayer._vertices.forEach((vert, idx) => {
+        meshControlMarkers.push(buildMeshMarker(vert, idx));
+    });
+    
+    document.getElementById('gridDensityVal').innerText = `${newRes} × ${newRes}`;
+});
+
+// =========================================================================
+// ROTATION, SCALING, & NUDGING LISTENERS
+// =========================================================================
+function applyRotationDelta(deltaDegrees) {
+    if (!activeGridMeshLayer) return;
+    activeGridMeshLayer.rotateBy(deltaDegrees);
+    currentTotalRotation = (currentTotalRotation + deltaDegrees) % 360;
+    document.getElementById('rotationVal').innerText = `${Math.round(currentTotalRotation)}°`;
+    document.getElementById('overlayRotateSlider').value = Math.round(currentTotalRotation);
+}
+
+function applyScaleMultiplier(multiplier) {
+    if (!activeGridMeshLayer) return;
+    activeGridMeshLayer.scaleBy(multiplier);
+    currentTotalScale *= multiplier;
+    const pct = Math.round(currentTotalScale * 100);
+    document.getElementById('scaleVal').innerText = `${pct}%`;
+    document.getElementById('overlayScaleSlider').value = pct;
+}
+
+// Rotation bindings
+document.getElementById('btnRotateCoarseLeft')?.addEventListener('click', () => applyRotationDelta(-5));
+document.getElementById('btnRotateFineLeft')?.addEventListener('click', () => applyRotationDelta(-1));
+document.getElementById('btnRotateFineRight')?.addEventListener('click', () => applyRotationDelta(1));
+document.getElementById('btnRotateCoarseRight')?.addEventListener('click', () => applyRotationDelta(5));
+
+let previousRotateVal = 0;
+document.getElementById('overlayRotateSlider')?.addEventListener('input', function(e) {
+    if (!activeGridMeshLayer) return;
+    const newVal = parseFloat(e.target.value);
+    activeGridMeshLayer.rotateBy(newVal - previousRotateVal);
+    currentTotalRotation = newVal;
+    previousRotateVal = newVal;
+    document.getElementById('rotationVal').innerText = `${Math.round(currentTotalRotation)}°`;
+});
+
+// Scale bindings
+document.getElementById('btnScaleCoarseDown')?.addEventListener('click', () => applyScaleMultiplier(0.95));
+document.getElementById('btnScaleFineDown')?.addEventListener('click', () => applyScaleMultiplier(0.99));
+document.getElementById('btnScaleFineUp')?.addEventListener('click', () => applyScaleMultiplier(1.01));
+document.getElementById('btnScaleCoarseUp')?.addEventListener('click', () => applyScaleMultiplier(1.05));
+
+document.getElementById('overlayScaleSlider')?.addEventListener('input', function(e) {
+    if (!activeGridMeshLayer || currentTotalScale <= 0) return;
+    const targetScale = parseFloat(e.target.value) / 100;
+    activeGridMeshLayer.scaleBy(targetScale / currentTotalScale);
+    currentTotalScale = targetScale;
+    document.getElementById('scaleVal').innerText = `${Math.round(e.target.value)}%`;
+});
+
+// Map Nudge & Global Actions
+const nudgeStep = 0.0001;
+document.getElementById('btnMoveNorth')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(nudgeStep, 0));
+document.getElementById('btnMoveSouth')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(-nudgeStep, 0));
+document.getElementById('btnMoveWest')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(0, -nudgeStep));
+document.getElementById('btnMoveEast')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(0, nudgeStep));
+
+document.getElementById('overlayOpacitySlider')?.addEventListener('input', function(e) {
+    const val = e.target.value / 100;
+    document.getElementById('opacityVal').innerText = e.target.value + '%';
+    if (activeGridMeshLayer) activeGridMeshLayer.setOpacity(val);
+});
+
+document.getElementById('btnLockOverlay')?.addEventListener('click', () => {
     if (!activeGridMeshLayer) return;
     meshControlMarkers.forEach(m => map.removeLayer(m));
     meshControlMarkers = [];
     meshLayersArray.push(activeGridMeshLayer);
     activeGridMeshLayer = null;
+    selectedMeshMarker = null;
     document.getElementById('opacityControlBlock').classList.add('hidden');
     document.getElementById('globalControls').classList.add('hidden');
     if (typeof saveMapState === "function") saveMapState();
 });
 
-document.getElementById('btnRemoveOverlay').addEventListener('click', removeActiveImageOverlay);
-document.getElementById('btnRotateLeft').addEventListener('click', () => activeGridMeshLayer?.rotateBy(-5));
-document.getElementById('btnRotateRight').addEventListener('click', () => activeGridMeshLayer?.rotateBy(5));
-document.getElementById('btnScaleDown').addEventListener('click', () => activeGridMeshLayer?.scaleBy(0.95));
-document.getElementById('btnScaleUp').addEventListener('click', () => activeGridMeshLayer?.scaleBy(1.05));
+document.getElementById('btnRemoveOverlay')?.addEventListener('click', removeActiveImageOverlay);
 
-const nudgeStep = 0.0001;
-document.getElementById('btnMoveNorth').addEventListener('click', () => activeGridMeshLayer?.moveBy(nudgeStep, 0));
-document.getElementById('btnMoveSouth').addEventListener('click', () => activeGridMeshLayer?.moveBy(-nudgeStep, 0));
-document.getElementById('btnMoveWest').addEventListener('click', () => activeGridMeshLayer?.moveBy(0, -nudgeStep));
-document.getElementById('btnMoveEast').addEventListener('click', () => activeGridMeshLayer?.moveBy(0, nudgeStep));
+// 1-Pixel Keyboard Nudging for Selected Mesh Dot
+document.addEventListener('keydown', (e) => {
+    if (!selectedMeshMarker || !activeGridMeshLayer) return;
+    const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    if (!arrowKeys.includes(e.key)) return;
+    e.preventDefault(); 
 
-document.getElementById('overlayOpacitySlider').addEventListener('input', function(e) {
-    const val = e.target.value / 100;
-    document.getElementById('opacityVal').innerText = e.target.value + '%';
-    if (activeGridMeshLayer) activeGridMeshLayer.setOpacity(val);
+    const currentLatLng = selectedMeshMarker.getLatLng();
+    const point = map.latLngToContainerPoint(currentLatLng);
+    
+    if (e.key === 'ArrowUp') point.y -= 1;
+    if (e.key === 'ArrowDown') point.y += 1;
+    if (e.key === 'ArrowLeft') point.x -= 1;
+    if (e.key === 'ArrowRight') point.x += 1;
+    
+    const newLatLng = map.containerPointToLatLng(point);
+    selectedMeshMarker.setLatLng(newLatLng);
+    activeGridMeshLayer.updateVertex(selectedMeshMarker.vertexIndex, newLatLng);
 });
 
 
@@ -1840,6 +2220,12 @@ map.on('contextmenu', function(e) {
             const opacityPercent = Math.round((activeGridMeshLayer._opacity || 0.75) * 100);
             document.getElementById('overlayOpacitySlider').value = opacityPercent;
             document.getElementById('opacityVal').innerText = opacityPercent + '%';
+
+            // Add inside map.on('contextmenu', ...), right next to where you sync rotation/opacity:
+            currentTotalScale = activeGridMeshLayer._customScaleTracker || 1.0;
+            const scalePercent = Math.round(currentTotalScale * 100);
+            document.getElementById('overlayScaleSlider').value = scalePercent;
+            document.getElementById('scaleVal').innerText = `${scalePercent}%`;
 
             // Stop checking other meshes underneath
             break;
