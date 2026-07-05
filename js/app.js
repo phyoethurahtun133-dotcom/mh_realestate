@@ -197,7 +197,6 @@ L.simpleMapScreenshoter({
 }).addTo(map);
 
 // UX Enhancement: Auto-enable Geoman editing when the print box appears
-// UX Enhancement: Auto-enable Geoman editing when the print box appears
 map.on('layeradd', function(e) {
     if (e.layer instanceof L.Rectangle && e.layer.options.color === 'red' && e.layer.options.dashArray === '5, 10') {
         if (e.layer.pm) {
@@ -410,6 +409,260 @@ function generatePopupHTML(plot, layer) {
     `;
 }
 
+
+// =========================================================================
+// FLOATING IMAGE LAYER EDIT CONTROLLER
+// =========================================================================
+
+const ImageEditController = {
+    activeLayer: null,
+    isExpanded: false,
+
+    init() {
+        this.toolbar = document.getElementById('imageEditToolbar');
+        this.trigger = document.getElementById('imageEditTrigger');
+        this.controls = document.getElementById('imageEditControls');
+        this.chevron = document.getElementById('imageEditChevron');
+        this.opacitySlider = document.getElementById('imgOpacitySlider');
+        this.opacityVal = document.getElementById('imgOpacityVal');
+
+        if (!this.toolbar) return;
+
+        // Toggle expand/collapse
+        this.trigger.addEventListener('click', () => this.toggleExpand());
+
+        // Synced Opacity Control
+        this.opacitySlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            this.opacityVal.textContent = `${Math.round(val * 100)}%`;
+            
+            if (this.activeLayer && typeof this.activeLayer.setOpacity === 'function') {
+                this.activeLayer.setOpacity(val);
+            }
+
+            // Sync with sidebar slider if the active layer is the mesh
+            if (this.activeLayer === activeGridMeshLayer) {
+                const sidebarSlider = document.getElementById('overlayOpacitySlider');
+                const sidebarVal = document.getElementById('opacityVal');
+                if (sidebarSlider && sidebarVal) {
+                    sidebarSlider.value = Math.round(val * 100);
+                    sidebarVal.innerText = `${Math.round(val * 100)}%`;
+                }
+            }
+        })
+
+        // Bring to Front / Send to Back
+        document.getElementById('imgBringFrontBtn').addEventListener('click', () => {
+            if (this.activeLayer && typeof this.activeLayer.bringToFront === 'function') {
+                this.activeLayer.bringToFront();
+            }
+        });
+
+        document.getElementById('imgSendBackBtn').addEventListener('click', () => {
+            if (this.activeLayer && typeof this.activeLayer.bringToBack === 'function') {
+                this.activeLayer.bringToBack();
+            }
+        });
+
+        // Safely Delete Custom Layers
+            document.getElementById('imgDeleteBtn').addEventListener('click', () => {
+                if (this.activeLayer) {
+                    if (this.activeLayer === activeGridMeshLayer) {
+                        // Triggers your custom cleanup function to remove canvas + purple dots
+                        removeActiveImageOverlay(); 
+                    } else {
+                        // Handles standard Geoman/Leaflet images
+                        map.removeLayer(this.activeLayer);
+                        if (typeof renderSidebarList === 'function') renderSidebarList();
+                        if (typeof saveMapState === 'function') saveMapState();
+                    }
+                    this.hide();
+                }
+            });
+            
+            // Done Editing / Lock Image
+            document.getElementById('imgDoneBtn').addEventListener('click', () => {
+                if (this.activeLayer === activeGridMeshLayer) {
+                    // Bridge directly to the sidebar's Lock function
+                    const lockBtn = document.getElementById('btnLockOverlay');
+                    if (lockBtn) lockBtn.click();
+                } else if (this.activeLayer && this.activeLayer.pm) {
+                    // Handle standard Geoman layers
+                    this.activeLayer.pm.disable();
+                }
+                this.hide();
+            });
+    },
+
+    attachTo(layer) {
+        this.activeLayer = layer;
+        this.toolbar.classList.remove('hidden');
+        
+        // Sync opacity slider with layer's current opacity
+        const currentOpacity = layer.options.opacity !== undefined ? layer.options.opacity : 1;
+        this.opacitySlider.value = currentOpacity;
+        this.opacityVal.textContent = `${Math.round(currentOpacity * 100)}%`;
+        
+
+        // Cache DOM elements
+        this.floatRotateSlider = document.getElementById('floatRotateSlider');
+        this.floatRotateVal = document.getElementById('floatRotateVal');
+        this.floatScaleSlider = document.getElementById('floatScaleSlider');
+        this.floatScaleVal = document.getElementById('floatScaleVal');
+        this.floatRotateBlock = document.getElementById('floatRotateBlock');
+        this.floatScaleBlock = document.getElementById('floatScaleBlock');
+
+        // Rotate Listener (Remote controls the sidebar)
+        this.floatRotateSlider.addEventListener('input', (e) => {
+            const val = e.target.value;
+            this.floatRotateVal.textContent = `${val}°`;
+            
+            if (this.activeLayer === activeGridMeshLayer) {
+                // IMPORTANT: Replace 'overlayRotateSlider' with your actual sidebar rotate ID
+                const sidebarRotate = document.getElementById('overlayRotateSlider'); 
+                if (sidebarRotate) {
+                    sidebarRotate.value = val;
+                    sidebarRotate.dispatchEvent(new Event('input', { bubbles: true })); // Triggers your WebGL logic
+                    sidebarRotate.dispatchEvent(new Event('change', { bubbles: true })); // Triggers your WebGL logic
+                }
+            }
+        });
+
+        // Scale Listener (Remote controls the sidebar)
+        this.floatScaleSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value).toFixed(1);
+            this.floatScaleVal.textContent = `${val}x`;
+            
+            if (this.activeLayer === activeGridMeshLayer) {
+                const sidebarScale = document.getElementById('overlayScaleSlider');
+                if (sidebarScale) {
+                    // MULTIPLY BY 100 to match the sidebar's 20-300 range
+                    sidebarScale.value = val * 100;
+                    
+                    // Fire events so your WebGL script catches it
+                    sidebarScale.dispatchEvent(new Event('input', { bubbles: true }));
+                    sidebarScale.dispatchEvent(new Event('change', { bubbles: true })); 
+                }
+            }
+        });
+
+        // Helper: Dynamically calculates movement size depending on how far zoomed in the user is
+            function getMoveDelta() {
+                const zoom = map.getZoom();
+                // Closer zoom = smaller, high-precision steps. Farther zoom = larger steps.
+                return 0.0005 / Math.pow(2, zoom - 12);
+            }
+
+            // Handler: Shifts all vertices and purple map control markers together
+            function nudgeActiveImage(deltaLat, deltaLng) {
+                if (!activeGridMeshLayer) return;
+
+                // 1. Shift all coordinate points of the warped image mesh
+                if (activeGridMeshLayer._vertices) {
+                    activeGridMeshLayer._vertices.forEach(vert => {
+                        vert.latlng.lat += deltaLat;
+                        vert.latlng.lng += deltaLng;
+                    });
+                }
+
+                // 2. Force Leaflet to re-render the image mesh structure
+                activeGridMeshLayer.draw();
+
+                // 3. Move the interactive purple control handles so they match up perfectly
+                if (typeof meshControlMarkers !== 'undefined' && meshControlMarkers.length > 0) {
+                    activeGridMeshLayer._vertices.forEach((vert, index) => {
+                        if (meshControlMarkers[index]) {
+                            meshControlMarkers[index].setLatLng(vert.latlng);
+                        }
+                    });
+                }
+                
+                // 4. Fire map sync states if available
+                if (typeof saveMapState === 'function') saveMapState();
+            }
+
+            // Bind the button elements to the execution events
+            document.getElementById('floatMoveUp')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nudgeActiveImage(getMoveDelta(), 0);
+            });
+
+            document.getElementById('floatMoveDown')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nudgeActiveImage(-getMoveDelta(), 0);
+            });
+
+            document.getElementById('floatMoveLeft')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nudgeActiveImage(0, -getMoveDelta());
+            });
+
+            document.getElementById('floatMoveRight')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nudgeActiveImage(0, getMoveDelta());
+            });
+
+        // Automatically expand when a new image is added or edited
+        if (!this.isExpanded) {
+            this.toggleExpand(true);
+        }
+
+
+
+
+        // NEW LOGIC: Conditional UI and Syncing
+        if (layer === activeGridMeshLayer) {
+            // Show rotate/scale for the Mesh
+            this.floatRotateBlock.style.display = 'block';
+            this.floatScaleBlock.style.display = 'block';
+
+            // Sync floating sliders to match current sidebar values
+            const sidebarRotate = document.getElementById('overlayRotateSlider'); // Verify ID
+            if (sidebarRotate) {
+                this.floatRotateSlider.value = sidebarRotate.value;
+                this.floatRotateVal.textContent = `${sidebarRotate.value}°`;
+            }
+
+            const sidebarScale = document.getElementById('overlayScaleSlider');
+            if (sidebarScale) {
+                // DIVIDE BY 100 to translate the sidebar's 100% back to a 1.0x decimal
+                const floatVal = sidebarScale.value / 100;
+                this.floatScaleSlider.value = floatVal;
+                this.floatScaleVal.textContent = `${floatVal.toFixed(1)}x`;
+            }
+        } else {
+            // Hide rotate/scale if it's just a normal Geoman layer
+            this.floatRotateBlock.style.display = 'none';
+            this.floatScaleBlock.style.display = 'none';
+        }
+        
+        this.show();
+    },
+
+    hide() {
+        this.activeLayer = null;
+        this.toolbar.classList.add('hidden');
+        this.toggleExpand(false);
+    },
+
+    toggleExpand(forceState) {
+        this.isExpanded = forceState !== undefined ? forceState : !this.isExpanded;
+        if (this.isExpanded) {
+            this.controls.classList.remove('hidden');
+            this.chevron.className = 'fas fa-chevron-up ml-1 text-[10px]';
+        } else {
+            this.controls.classList.add('hidden');
+            this.chevron.className = 'fas fa-chevron-down ml-1 text-[10px]';
+        }
+    }
+};
+
+// Initialize controller once DOM is loaded
+window.addEventListener('DOMContentLoaded', () => {
+    ImageEditController.init();
+});
+
+
 // =========================================================================
 // CUSTOM PIN ICON & COLOR SELECTOR HANDLERS
 // =========================================================================
@@ -465,10 +718,8 @@ map.on('pm:create', (e) => {
             pinSection.classList.add('hidden');
         }
     }
-
-
-    // Toggle the visibility of the Icon Picker based on the layer type
-// Toggle the visibility of styling containers based on the active layer type
+    
+    // Toggle the visibility of styling containers based on the active layer type
     const markerStyles = document.getElementById('markerStylesContainer');
     const textStyles = document.getElementById('textStylesContainer');
 
@@ -488,8 +739,51 @@ map.on('pm:create', (e) => {
         }
     }
 
+        if (e.layer instanceof L.ImageOverlay || e.shape === 'Image') {
+            ImageEditController.attachTo(e.layer);
+        }
 
+        e.layer.on('pm:edit', () => {
+            ImageEditController.attachTo(e.layer);
+        });
+
+        e.layer.on('click', () => {
+            if (e.layer.pm && e.layer.pm.enabled()) {
+                ImageEditController.attachTo(e.layer);
+
+            }
+        });
     document.getElementById('metaModal').style.display = 'flex';
+});
+
+// Global hook: Catch right-clicks on images and meshes to reopen the editor
+// Paste this where you initialize your map or layer event listeners
+map.on('layeradd', function(e) {
+    // Target standard image overlays and your custom WebGL mesh layers
+    if (e.layer instanceof L.ImageOverlay || e.layer === activeGridMeshLayer || e.layer instanceof L.GridMeshLayer) {
+        
+        e.layer.on('contextmenu', function(evt) {
+            // Stop the default browser right-click menu and map propagation
+            L.DomEvent.preventDefault(evt);
+            L.DomEvent.stopPropagation(evt);
+            
+            // 1. Fire your existing sidebar/editing activation logic 
+            if (e.layer.pm && !e.layer.pm.enabled()) {
+                e.layer.pm.enable(); 
+            }
+            
+            // 2. Simultaneously summon the floating toolbar window
+            if (typeof ImageEditController !== 'undefined') {
+                ImageEditController.attachTo(e.layer);
+            }
+        });
+    }
+});
+
+map.on('pm:globaleditmodetoggled', (e) => {
+    if (!e.enabled) {
+        ImageEditController.hide();
+    }
 });
 
 // SINGLE, SAFE META-FORM SUBMIT LISTENER
@@ -532,6 +826,7 @@ document.getElementById('metaForm').addEventListener('submit', (e) => {
 
     const metadata = {
         id: editingPlotId ? editingPlotId : Date.now(),
+        isVisible: true, // <-- ADD THIS
         landId: document.getElementById('landIdInput').value,
         price: document.getElementById('priceInput').value,
         status: document.getElementById('statusInput').value,
@@ -844,6 +1139,9 @@ function renderSidebarList() {
     
     listContainer.innerHTML = ''; 
 
+    let totalFilteredCount = 0;
+    let visibleFilteredCount = 0;
+
     landLayersArray.forEach(plot => {
         const matchesStatus = (filterStatus === 'all' || plot.status === filterStatus);
         const matchesTownship = (filterTownship === 'all' || plot.township === filterTownship); 
@@ -852,16 +1150,30 @@ function renderSidebarList() {
         const searchString = `${plot.landId} ${plot.township} ${plot.quarter}`.toLowerCase();
         const matchesSearch = searchString.includes(searchTerm);
 
+        // 1. If it doesn't match the search/dropdown filters, hide it immediately
         if (!matchesStatus || !matchesSearch || !matchesTownship || !matchesQuarter) {
             map.removeLayer(plot.layerRef);
             return;
         }
         
-        plot.layerRef.addTo(map);
+        totalFilteredCount++;
+
+        // 2. Check individual visibility preference (defaults to true if undefined)
+        const isLayerVisible = (plot.isVisible !== false);
+        if (isLayerVisible) {
+            if (!map.hasLayer(plot.layerRef)) plot.layerRef.addTo(map);
+            visibleFilteredCount++;
+        } else {
+            if (map.hasLayer(plot.layerRef)) map.removeLayer(plot.layerRef);
+        }
 
         const item = document.createElement('div');
-        item.setAttribute('data-plot-id', plot.id); // <-- ADD THIS LINE HERE
-        item.className = `bg-white p-4 mb-3 rounded-lg border shadow-sm hover:shadow-md cursor-pointer transition-shadow border-l-4 ${plot.status === 'Available' ? 'border-l-emerald-500 border-gray-200' : 'border-l-gray-400 border-gray-200'}`;
+        item.setAttribute('data-plot-id', plot.id);
+        
+        // Dim the sidebar card slightly if the layer is currently hidden
+        const cardOpacityClass = isLayerVisible ? 'opacity-100' : 'opacity-60 bg-gray-50';
+        
+        item.className = `${cardOpacityClass} bg-white p-4 mb-3 rounded-lg border shadow-sm hover:shadow-md cursor-pointer transition-all border-l-4 ${plot.status === 'Available' ? 'border-l-emerald-500 border-gray-200' : 'border-l-gray-400 border-gray-200'}`;
         
         item.innerHTML = `
             <div class="flex justify-between items-start mb-2">
@@ -876,42 +1188,128 @@ function renderSidebarList() {
             </div>
             <div class="flex justify-between items-center pt-2 border-t border-gray-100">
                 <span class="font-bold text-emerald-700 text-sm">${plot.price} Lakhs</span>
-                <button class="edit-btn text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 hover:bg-blue-50 rounded transition-colors">
-                    <i class="fas fa-edit mr-1"></i>Edit
-                </button>
+                
+                <div class="flex items-center gap-1.5">
+                    <button class="toggle-visibility-btn text-xs px-2 py-1 rounded border transition-colors ${isLayerVisible ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-gray-200'}" title="${isLayerVisible ? 'Hide Layer' : 'Show Layer'}">
+                        <i class="fas ${isLayerVisible ? 'fa-eye' : 'fa-eye-slash'} mr-1"></i> ${isLayerVisible ? 'Shown' : 'Hidden'}
+                    </button>
+                    
+                    <button class="edit-btn text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 hover:bg-blue-50 rounded transition-colors">
+                        <i class="fas fa-edit mr-1"></i>Edit
+                    </button>
+                </div>
             </div>
         `;
         
-            item.addEventListener('click', (e) => {
-                if (e.target.closest('.edit-btn')) {
-                    openEditModal(plot.id);
+        item.addEventListener('click', (e) => {
+            if (e.target.closest('.edit-btn')) {
+                openEditModal(plot.id);
+            } else if (e.target.closest('.toggle-visibility-btn')) {
+                e.stopPropagation(); // Prevent card click from flying to plot
+                togglePlotVisibility(plot);
+            } else {
+                if (isLayerVisible) {
+                    flyToPlotCinematically(plot);
                 } else {
-                    // Use the cinematic flight instead of instant snapping
+                    // If hidden, make it visible when clicked to fly to it
+                    togglePlotVisibility(plot);
                     flyToPlotCinematically(plot);
                 }
-            });
+            }
+        });
 
         listContainer.appendChild(item);
     });
 
-// REPLACE the bottom of renderSidebarList() with this:
+    // 3. Update Empty State
     if (landLayersArray.length === 0) {
-        // State 1: No properties exist on the map at all
         listContainer.innerHTML = `
             <div class="text-center p-5 text-gray-400 text-sm mt-10">
                 <i class="fas fa-draw-polygon text-3xl mb-3 text-gray-300 block"></i>
                 Draw a plot on the map to begin.
             </div>`;
     } else if (listContainer.innerHTML === '') {
-        // State 2: Properties exist, but filters hid all of them
         listContainer.innerHTML = `
             <div class="text-center p-5 text-gray-400 text-sm mt-10">
                 No properties match your current filters.
             </div>`;
     }
     
+    // 4. Update Master Toggle Button State
+    updateMasterToggleUI(totalFilteredCount, visibleFilteredCount);
+
     updateHeatmapData();
 } // <-- End of renderSidebarList function
+
+/**
+ * Toggles the visibility of a single plot
+ */
+function togglePlotVisibility(plot) {
+    plot.isVisible = (plot.isVisible === false); // Flip boolean state
+    renderSidebarList();
+    if (typeof saveMapState === "function") saveMapState();
+}
+
+/**
+ * Updates the text and icon of the Master Toggle button
+ */
+function updateMasterToggleUI(totalFiltered, visibleCount) {
+    const btn = document.getElementById('toggleAllVisibilityBtn');
+    const icon = document.getElementById('toggleAllVisibilityIcon');
+    const text = document.getElementById('toggleAllVisibilityText');
+    if (!btn || !icon || !text) return;
+
+    if (totalFiltered === 0) {
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed');
+        return;
+    }
+
+    btn.disabled = false;
+    btn.classList.remove('opacity-50', 'cursor-not-allowed');
+
+    // If at least one layer is currently visible, clicking the button will hide all.
+    // Otherwise, clicking will show all.
+    if (visibleCount > 0) {
+        icon.className = 'fas fa-eye-slash text-gray-600';
+        text.innerText = 'Hide All';
+    } else {
+        icon.className = 'fas fa-eye text-emerald-600';
+        text.innerText = 'Show All';
+    }
+}
+
+// Master Toggle Button Event Listener
+document.getElementById('toggleAllVisibilityBtn')?.addEventListener('click', function() {
+    const filterStatus = document.getElementById('statusFilter').value;
+    const filterTownship = document.getElementById('townshipFilter').value; 
+    const filterQuarter = document.getElementById('quarterFilter').value;   
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+
+    // 1. Find all plots currently matching active search/dropdown filters
+    const activePlots = landLayersArray.filter(plot => {
+        const matchesStatus = (filterStatus === 'all' || plot.status === filterStatus);
+        const matchesTownship = (filterTownship === 'all' || plot.township === filterTownship); 
+        const matchesQuarter = (filterQuarter === 'all' || plot.quarter === filterQuarter);   
+        const searchString = `${plot.landId} ${plot.township} ${plot.quarter}`.toLowerCase();
+        return matchesStatus && matchesTownship && matchesQuarter && searchString.includes(searchTerm);
+    });
+
+    if (activePlots.length === 0) return;
+
+    // 2. Determine target state: If any are visible, hide them all. If all are hidden, show them all.
+    const anyVisible = activePlots.some(plot => plot.isVisible !== false);
+    const targetState = !anyVisible;
+
+    // 3. Apply state change to filtered plots
+    activePlots.forEach(plot => {
+        plot.isVisible = targetState;
+    });
+
+    renderSidebarList();
+    if (typeof saveMapState === "function") saveMapState();
+});
+
 
 // =========================================================================
 // SIDEBAR SELECTION HIGHLIGHT LOGIC
@@ -1263,6 +1661,19 @@ L.GridMeshLayer = L.Layer.extend({
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     },
 
+    // Add these right after _initWebGL or before setOpacity
+    bringToFront: function () {
+        if (this._canvas && this._canvas.parentNode) {
+            this._canvas.parentNode.appendChild(this._canvas);
+        }
+    },
+
+    bringToBack: function () {
+        if (this._canvas && this._canvas.parentNode) {
+            this._canvas.parentNode.prepend(this._canvas);
+        }
+    },
+
     // ... (Keep _createShader, _createProgram, _loadTexture exactly the same) ...
     _createShader: function(gl, type, source) {
         const shader = gl.createShader(type);
@@ -1429,7 +1840,7 @@ L.GridMeshLayer = L.Layer.extend({
         this.fire('meshReady');
     },
 
-// --- OPTIMIZATION 2: Pre-allocate Memory for a Subdivided Mesh (CORRECTED) ---
+    // --- OPTIMIZATION 2: Pre-allocate Memory for a Subdivided Mesh (CORRECTED) ---
     _allocateBuffers: function() {
         this._subdivisions = 6; 
         
@@ -1650,13 +2061,18 @@ function buildMeshMarker(vert, index) {
 
     // Click selection behavior for 1px keyboard nudging
     marker.on('click', function(e) {
-        L.DomEvent.stopPropagation(e);
-        if (selectedMeshMarker) {
-            selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '2px solid white');
-        }
-        selectedMeshMarker = marker;
-        selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '3px solid #facc15'); // Yellow ring
-    });
+            L.DomEvent.stopPropagation(e);
+            if (selectedMeshMarker) {
+                selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '2px solid white');
+            }
+            selectedMeshMarker = marker;
+            selectedMeshMarker.getElement()?.querySelector('div')?.style.setProperty('border', '3px solid #facc15');
+            
+            // ADD THIS: Re-open floating toolbar when a dot is clicked
+            if (activeGridMeshLayer) {
+                ImageEditController.attachTo(activeGridMeshLayer);
+            }
+        });
 
     return marker;
 }
@@ -1664,6 +2080,13 @@ function buildMeshMarker(vert, index) {
 // Helper: Remove active image overlay cleanly
 function removeActiveImageOverlay() {
     if (activeGridMeshLayer) {
+
+        // === ADD THIS BLOCK: Erase the HTML item from the sidebar ===
+        if (activeGridMeshLayer._sidebarElement) {
+            activeGridMeshLayer._sidebarElement.remove();
+        }
+
+
         map.removeLayer(activeGridMeshLayer);
         activeGridMeshLayer = null;
     }
@@ -1709,6 +2132,10 @@ document.getElementById('overlayImageInput').addEventListener('change', function
         document.getElementById('globalControls').classList.remove('hidden');
         document.getElementById('overlayOpacitySlider').value = 75;
         document.getElementById('opacityVal').innerText = '75%';
+
+        // ADD THIS: Trigger the floating toolbar!
+        ImageEditController.attachTo(activeGridMeshLayer);
+
     };
 
     reader.readAsDataURL(file);
@@ -1787,12 +2214,61 @@ document.getElementById('overlayScaleSlider')?.addEventListener('input', functio
     document.getElementById('scaleVal').innerText = `${Math.round(e.target.value)}%`;
 });
 
-// Map Nudge & Global Actions
-const nudgeStep = 0.0001;
-document.getElementById('btnMoveNorth')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(nudgeStep, 0));
-document.getElementById('btnMoveSouth')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(-nudgeStep, 0));
-document.getElementById('btnMoveWest')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(0, -nudgeStep));
-document.getElementById('btnMoveEast')?.addEventListener('click', () => activeGridMeshLayer?.moveBy(0, nudgeStep));
+// Map Nudge & Global Actions (Synced with Floating Window Logic)
+
+        // Helper: Dynamically calculates movement size depending on how far zoomed in the user is
+            function getMoveDelta() {
+                const zoom = map.getZoom();
+                // Closer zoom = smaller, high-precision steps. Farther zoom = larger steps.
+                return 0.0005 / Math.pow(2, zoom - 12);
+            }
+
+            // Handler: Shifts all vertices and purple map control markers together
+            function nudgeActiveImage(deltaLat, deltaLng) {
+                if (!activeGridMeshLayer) return;
+
+                // 1. Shift all coordinate points of the warped image mesh
+                if (activeGridMeshLayer._vertices) {
+                    activeGridMeshLayer._vertices.forEach(vert => {
+                        vert.latlng.lat += deltaLat;
+                        vert.latlng.lng += deltaLng;
+                    });
+                }
+
+                // 2. Force Leaflet to re-render the image mesh structure
+                activeGridMeshLayer.draw();
+
+                // 3. Move the interactive purple control handles so they match up perfectly
+                if (typeof meshControlMarkers !== 'undefined' && meshControlMarkers.length > 0) {
+                    activeGridMeshLayer._vertices.forEach((vert, index) => {
+                        if (meshControlMarkers[index]) {
+                            meshControlMarkers[index].setLatLng(vert.latlng);
+                        }
+                    });
+                }
+                
+                // 4. Fire map sync states if available
+                if (typeof saveMapState === 'function') saveMapState();
+            }
+document.getElementById('btnMoveNorth')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    nudgeActiveImage(getMoveDelta(), 0);
+});
+
+document.getElementById('btnMoveSouth')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    nudgeActiveImage(-getMoveDelta(), 0);
+});
+
+document.getElementById('btnMoveWest')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    nudgeActiveImage(0, -getMoveDelta());
+});
+
+document.getElementById('btnMoveEast')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    nudgeActiveImage(0, getMoveDelta());
+});
 
 document.getElementById('overlayOpacitySlider')?.addEventListener('input', function(e) {
     const val = e.target.value / 100;
@@ -1804,6 +2280,10 @@ document.getElementById('btnLockOverlay')?.addEventListener('click', () => {
     if (!activeGridMeshLayer) return;
     meshControlMarkers.forEach(m => map.removeLayer(m));
     meshControlMarkers = [];
+
+    // === ADD THIS LINE: Send to sidebar before pushing to array ===
+    addImageToSidebar(activeGridMeshLayer, "Overlay Image " + (meshLayersArray.length + 1));
+
     meshLayersArray.push(activeGridMeshLayer);
     activeGridMeshLayer = null;
     selectedMeshMarker = null;
@@ -1849,6 +2329,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
         const geoJsonFeature = plot.layerRef.toGeoJSON();
         geoJsonFeature.properties = {
             layerType: 'vectorPlot', id: plot.id, landId: plot.landId,
+            isVisible: (plot.isVisible !== false), // <-- ADD THIS
             price: plot.price, status: plot.status, color: plot.color, 
             division: plot.division, township: plot.township, quarter: plot.quarter,
             number: plot.number, remark: plot.remark, imageBase64: plot.imageBase64,
@@ -1983,31 +2464,60 @@ function createLayerFromSchema(plotData) {
 }
 
 function loadGeoJsonToMap(importedGeoJson) {
+    // ==========================================
+    // 1. FULL WIPE & CLEANUP PHASE
+    // ==========================================
+    
+    // A. Clear Image Meshes & HTML Sidebar List
     meshLayersArray.forEach(mesh => map.removeLayer(mesh));
     meshLayersArray = [];
+    const imageList = document.getElementById('imageLayerList');
+    if (imageList) {
+        imageList.innerHTML = ''; // <-- FIX: Erases old sidebar duplicates
+    }
 
-    importedGeoJson.features?.forEach(feature => {
-        const metadata = feature.properties;
-        if (!metadata) return;
+    // B. Clear Standard Vector Plots & Map Layers
+    if (typeof landLayersArray !== 'undefined') {
+        landLayersArray.forEach(plot => {
+            if (plot.layerRef && map.hasLayer(plot.layerRef)) {
+                map.removeLayer(plot.layerRef);
+            }
+        });
+        landLayersArray = []; // <-- FIX: Prevents underlying data from ballooning
+    }
 
-        if (metadata.layerType === 'gridMeshImage') {
-            const restoredMesh = new L.GridMeshLayer(metadata.imgUrl, null, metadata.cols, metadata.rows, { 
-                opacity: metadata.opacity || 0.75 
-            });
-            map.addLayer(restoredMesh);
+    // ==========================================
+    // 2. PROCEED WITH LOADING SAVED DATA
+    // ==========================================
+importedGeoJson.features?.forEach(feature => {
+    const metadata = feature.properties;
+    if (!metadata) return;
 
-            restoredMesh.on('meshReady', () => {
-                if (metadata.vertices && metadata.vertices.length === restoredMesh._vertices.length) {
-                    metadata.vertices.forEach((savedV, i) => {
-                        restoredMesh._vertices[i].latlng = L.latLng(savedV.lat, savedV.lng);
-                    });
-                }
-                restoredMesh.draw(); 
-            });
+    // FIX: Removed identical nested duplicate block
+    if (metadata.layerType === 'gridMeshImage') {
+        const restoredMesh = new L.GridMeshLayer(metadata.imgUrl, null, metadata.cols, metadata.rows, { 
+            opacity: metadata.opacity || 0.75 
+        });
+        map.addLayer(restoredMesh);
 
-            meshLayersArray.push(restoredMesh);
-            return;
+        restoredMesh.on('meshReady', () => {
+            if (metadata.vertices && metadata.vertices.length === restoredMesh._vertices.length) {
+                metadata.vertices.forEach((savedV, i) => {
+                    restoredMesh._vertices[i].latlng = L.latLng(savedV.lat, savedV.lng);
+                });
+            }
+            restoredMesh.draw(); 
+        });
+
+        meshLayersArray.push(restoredMesh);
+        
+        // === Restore it to the sidebar ===
+        if (typeof addImageToSidebar === 'function') {
+            addImageToSidebar(restoredMesh, "Overlay Image " + meshLayersArray.length);
         }
+        
+        return; // Stop processing further for mesh assets (no vector geometry to build)
+    }
 
         if (feature.geometry) {
             L.geoJSON(feature, {
@@ -2078,6 +2588,7 @@ function loadGeoJsonToMap(importedGeoJson) {
 
             landLayersArray.push({
                 id: metadata.id || Date.now(), 
+                isVisible: (metadata.isVisible !== undefined) ? metadata.isVisible : true, // <-- ADD THIS
                 landId: metadata.landId || 'Unnamed',
                 price: metadata.price || 0, 
                 status: metadata.status || 'Available', 
@@ -2170,68 +2681,124 @@ function getMeshBoundary(mesh) {
 
 // Listen for Right-Click (contextmenu) on the map
 map.on('contextmenu', function(e) {
-    // If there is already an active image being edited, require the user to lock it first
     if (activeGridMeshLayer) {
-        // Optional: You can change this to an alert() if you want to notify the user explicitly
         console.log("Please lock the currently active image before unlocking another.");
         return; 
     }
 
-    // Loop backwards to check the top-most locked image first
     for (let i = meshLayersArray.length - 1; i >= 0; i--) {
         const mesh = meshLayersArray[i];
         const boundary = getMeshBoundary(mesh);
 
-        // If the right-click happened inside this image's boundaries
         if (isPointInPolygon(e.latlng, boundary)) {
-            
-            // 1. Remove it from the locked array
-            meshLayersArray.splice(i, 1);
-            
-            // 2. Set it as the active editing layer
-            activeGridMeshLayer = mesh;
-            
-            // 3. Re-generate the purple control dots
-            activeGridMeshLayer._vertices.forEach((vert) => {
-                const marker = L.marker(vert.latlng, {
-                    draggable: true,
-                    pmIgnore: true, 
-                    icon: L.divIcon({
-                        className: 'mesh-handle',
-                        html: `<div style="background:#9333ea; width:12px; height:12px; border:2px solid white; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.6); cursor:grab;"></div>`,
-                        iconSize: [12, 12],
-                        iconAnchor: [6, 6]
-                    })
-                }).addTo(map);
-
-                marker.on('drag', function(dragEvent) {
-                    vert.latlng = dragEvent.target.getLatLng();
-                    activeGridMeshLayer.draw();
-                });
-
-                meshControlMarkers.push(marker);
-            });
-
-            // 4. Reveal the UI Controls in the sidebar
-            document.getElementById('opacityControlBlock').classList.remove('hidden');
-            document.getElementById('globalControls').classList.remove('hidden');
-            
-            // 5. Sync the opacity slider to match this newly unlocked image
-            const opacityPercent = Math.round((activeGridMeshLayer._opacity || 0.75) * 100);
-            document.getElementById('overlayOpacitySlider').value = opacityPercent;
-            document.getElementById('opacityVal').innerText = opacityPercent + '%';
-
-            // Add inside map.on('contextmenu', ...), right next to where you sync rotation/opacity:
-            currentTotalScale = activeGridMeshLayer._customScaleTracker || 1.0;
-            const scalePercent = Math.round(currentTotalScale * 100);
-            document.getElementById('overlayScaleSlider').value = scalePercent;
-            document.getElementById('scaleVal').innerText = `${scalePercent}%`;
-
-            // Stop checking other meshes underneath
+            // Trigger the new function!
+            activateImageEditMode(mesh);
             break;
         }
     }
 });
+
+function addImageToSidebar(meshLayer, imageName = "Overlaid Image") {
+    const listContainer = document.getElementById('imageLayerList');
+    if (!listContainer) return;
+
+    // Create a new list item
+    const li = document.createElement('li');
+    li.className = "flex justify-between items-center p-3 mb-2 bg-white rounded shadow-sm border border-gray-200 cursor-pointer hover:bg-indigo-50 transition-colors";
+    
+    // Add an icon and the text
+    li.innerHTML = `
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-image text-indigo-500"></i>
+            <span class="font-medium text-gray-700 font-sm">${imageName}</span>
+        </div>
+        <button class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded hover:bg-indigo-200">
+            Edit
+        </button>
+    `;
+
+    // Make the entire row clickable to unlock and edit the image
+    li.addEventListener('click', () => {
+        activateImageEditMode(meshLayer);
+    });
+
+    // Save a reference to the LI element on the mesh so we can delete it later
+    meshLayer._sidebarElement = li; 
+
+    listContainer.appendChild(li);
+}
+
+function activateImageEditMode(targetMesh) {
+    // 1. Prevent activating if one is already active
+    if (activeGridMeshLayer) {
+        console.log("Please lock the currently active image before unlocking another.");
+        // Optional: Alert the user so they know why it didn't work
+        alert("Please lock the currently active image first."); 
+        return; 
+    }
+
+    // === ADD THIS BLOCK: Erase from sidebar list when editing starts ===
+    if (targetMesh._sidebarElement) {
+        targetMesh._sidebarElement.remove();
+        targetMesh._sidebarElement = null; // Reset it
+    }
+
+    // 2. Remove it from the locked array (meshLayersArray)
+    const index = meshLayersArray.indexOf(targetMesh);
+    if (index > -1) {
+        meshLayersArray.splice(index, 1);
+    }
+
+    // 3. Bring the layer to the front of the map so you can see it over the other image!
+    if (targetMesh.bringToFront) {
+        targetMesh.bringToFront();
+    }
+
+    // 4. Set it as the active editing layer
+    activeGridMeshLayer = targetMesh;
+
+    // 5. Re-generate the purple control dots
+    activeGridMeshLayer._vertices.forEach((vert) => {
+        const marker = L.marker(vert.latlng, {
+            draggable: true,
+            pmIgnore: true, 
+            icon: L.divIcon({
+                className: 'mesh-handle',
+                html: `<div style="background:#9333ea; width:12px; height:12px; border:2px solid white; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,0.6); cursor:grab;"></div>`,
+                iconSize: [12, 12],
+                iconAnchor: [6, 6]
+            })
+        }).addTo(map);
+
+        marker.on('drag', function(dragEvent) {
+            vert.latlng = dragEvent.target.getLatLng();
+            activeGridMeshLayer.draw();
+        });
+
+        meshControlMarkers.push(marker);
+    });
+
+    // 6. Reveal the UI Controls in the sidebar
+    document.getElementById('opacityControlBlock').classList.remove('hidden');
+    document.getElementById('globalControls').classList.remove('hidden');
+
+    // 7. Sync sidebar sliders
+    const opacityPercent = Math.round((activeGridMeshLayer._opacity || 0.75) * 100);
+    document.getElementById('overlayOpacitySlider').value = opacityPercent;
+    document.getElementById('opacityVal').innerText = opacityPercent + '%';
+
+    currentTotalScale = activeGridMeshLayer._customScaleTracker || 1.0;
+    const scalePercent = Math.round(currentTotalScale * 100);
+    if (document.getElementById('overlayScaleSlider')) {
+        document.getElementById('overlayScaleSlider').value = scalePercent;
+        document.getElementById('scaleVal').innerText = `${scalePercent}%`;
+    }
+
+    // 8. Trigger your controller to show floating tools
+    if (typeof ImageEditController !== 'undefined') {
+        ImageEditController.attachTo(activeGridMeshLayer);
+    }
+}
 
 /**
  * Safely extracts geometric bounds from any Leaflet layer type (Polygon, Pin, Text)
